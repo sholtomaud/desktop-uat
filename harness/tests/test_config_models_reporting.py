@@ -102,7 +102,7 @@ def result(sid, status, *criteria, **kw):
 
 def crit(cid, status, **kw):
     return CriterionResult(criterion_id=cid, description=f"desc {cid}", kind="visual", status=status,
-                           source="agent", observation=kw.pop("observation", "obs"), **kw)
+                           source=kw.pop("source", "agent"), observation=kw.pop("observation", "obs"), **kw)
 
 
 @pytest.fixture
@@ -226,3 +226,62 @@ def test_a_passing_run_annotates_nothing(report):
     report.scenarios = report.scenarios[:1]
 
     assert workflow_annotations(report) == []
+
+
+# ----------------------------------------------------------------- walkthrough mode and report.html
+@pytest.fixture
+def walkthrough_report(tmp_path):
+    shot = tmp_path / "evidence" / "smoke" / "E001-dashboard.png"
+    shot.parent.mkdir(parents=True)
+    shot.write_bytes(b"\x89PNG walkthrough")
+    r = RunReport(run_id="7", git_ref="", git_sha="", build=BuildRef(sha256=SHA, name="uat-demo-1.4.0.zip"),
+                  model_id="", mode="walkthrough", started_at="t", ended_at="t", status="PASS", totals={},
+                  scenarios=[result("smoke", "PASS",
+                                    crit("C1", "NOT_RUN", observation="Not judged <b>in walkthrough</b>",
+                                         evidence=["E001"], source="harness"),
+                                    evidence=[Evidence(id="E001", label="dashboard & more", s3_uri=None,
+                                                       local_path=str(shot), captured_at="t")])])
+    r.totals = totals(r)
+    return r
+
+
+def test_a_walkthrough_summary_says_visual_criteria_await_review(walkthrough_report, tmp_path):
+    write_all(walkthrough_report, tmp_path)
+
+    md = (tmp_path / "summary.md").read_text()
+    assert md.startswith("## Desktop UAT ✅ PASS · walkthrough (no agent)")
+    assert "Visual criteria are not judged in walkthrough mode" in md
+    assert "`E001` `evidence/smoke/E001-dashboard.png`" in md
+    assert "s3://" not in md
+
+
+def test_in_walkthrough_mode_unjudged_visual_criteria_are_notices_not_errors(walkthrough_report):
+    assert workflow_annotations(walkthrough_report) == [
+        "::notice title=UAT smoke C1 awaits review::desc C1: Not judged <b>in walkthrough</b> (harness; evidence E001)"]
+
+
+def test_report_html_embeds_every_screenshot_and_escapes_text(walkthrough_report, tmp_path):
+    write_all(walkthrough_report, tmp_path)
+
+    html = (tmp_path / "report.html").read_text()
+    import base64
+    encoded = base64.b64encode(b"\x89PNG walkthrough").decode()
+    assert f'src="data:image/png;base64,{encoded}"' in html
+    assert "dashboard &amp; more" in html
+    assert "Not judged &lt;b&gt;in walkthrough&lt;/b&gt;" in html
+    assert "<b>in walkthrough</b>" not in html
+
+
+def test_report_html_survives_a_missing_screenshot(report, tmp_path):
+    write_all(report, tmp_path)  # its E001 points at a path that does not exist
+
+    html = (tmp_path / "report.html").read_text()
+    assert "E001" in html and "missing" in html
+
+
+def test_report_html_needs_nothing_from_the_network(walkthrough_report, tmp_path):
+    """It is opened from an unzipped artifact, possibly offline."""
+    write_all(walkthrough_report, tmp_path)
+
+    html = (tmp_path / "report.html").read_text()
+    assert "http://" not in html and "https://" not in html

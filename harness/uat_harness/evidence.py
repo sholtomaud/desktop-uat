@@ -11,7 +11,9 @@ from .session import SCREENSHOT_TOOL, DesktopSession
 
 
 class EvidenceRecorder:
-    def __init__(self, session: DesktopSession, s3_client, bucket: str, key_prefix: str, local_dir: Path):
+    """With s3_client None (local mode), screenshots are kept on disk only."""
+
+    def __init__(self, session: DesktopSession, s3_client, bucket: str | None, key_prefix: str, local_dir: Path):
         self.session = session
         self.s3 = s3_client
         self.bucket = bucket
@@ -30,10 +32,13 @@ class EvidenceRecorder:
             name = f"{eid}-{slug}.{ext}"
             path = self.local_dir / name
             path.write_bytes(img)
-            key = f"{self.key_prefix}/{name}"
-            self.s3.put_object(Bucket=self.bucket, Key=key, Body=img, ContentType=ctype)
+            s3_uri = None
+            if self.s3 is not None:
+                key = f"{self.key_prefix}/{name}"
+                self.s3.put_object(Bucket=self.bucket, Key=key, Body=img, ContentType=ctype)
+                s3_uri = f"s3://{self.bucket}/{key}"
             ev = Evidence(
-                id=eid, label=label[:200], s3_uri=f"s3://{self.bucket}/{key}",
+                id=eid, label=label[:200], s3_uri=s3_uri,
                 local_path=str(path), captured_at=datetime.now(timezone.utc).isoformat(),
             )
             self.items.append(ev)

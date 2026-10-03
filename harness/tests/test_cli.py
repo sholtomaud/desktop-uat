@@ -189,3 +189,83 @@ def test_outside_github_actions_no_workflow_commands_are_printed(run, capsys, mo
     run(b="FAIL")
 
     assert "::" not in capsys.readouterr().out
+
+
+# ----------------------------------------------------------------- local (walkthrough) mode
+@pytest.fixture
+def local_run(tmp_path, monkeypatch):
+    """`uat_harness local` with the FlaUI server and the screen replaced: what CI's windows
+    job runs for real."""
+    from support import PNG, FakeDesktop
+    from uat_harness import local
+
+    desktop = FakeDesktop()
+    desktop.tools = [t for t in desktop.tools if t.tool_name != "screenshot"]
+    started = {}
+
+    def fake_client(exe, args):
+        started.update(exe=exe, args=args)
+        return desktop
+
+    monkeypatch.setattr(local, "flaui_stdio_client", fake_client)
+    monkeypatch.setattr(local, "capture_screen", lambda: PNG)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    sdir = tmp_path / "scenarios"
+    sdir.mkdir()
+    write_scenario(sdir, "a")
+
+    def _run(*extra):
+        out = tmp_path / "reports"
+        rc = cli.main(["local", "--scenarios", str(sdir), "--flaui-server", "C:/flaui/FlaUiMcpServer.exe",
+                       "--allowed-hosts", "localhost", "--state-root", "%APPDATA%\\UatDemo",
+                       "--build-url", "https://localhost:8443/uat-demo-1.4.0.zip", "--build-sha256", SHA,
+                       "--run-id", "local-1", "--out", str(out), *extra])
+        return rc, out
+    _run.desktop, _run.started = desktop, started
+    return _run
+
+
+def test_local_mode_writes_the_same_reports_plus_html(local_run):
+    rc, out = local_run()
+
+    assert rc == 0
+    assert {"report.json", "junit.xml", "summary.md", "report.html"} <= {p.name for p in out.iterdir()}
+    assert sorted(p.name for p in (out / "evidence" / "a").iterdir()) == ["E001-app-launched.png",
+                                                                          "E002-final-state.png"]
+
+
+def test_local_mode_records_itself_in_the_report(local_run):
+    from uat_harness.models import RunReport
+
+    _, out = local_run()
+
+    r = RunReport.model_validate_json((out / "report.json").read_text())
+    assert r.mode == "walkthrough"
+    assert r.build.name == "uat-demo-1.4.0.zip" and r.build.s3_uri is None
+    assert r.build.source_url == "https://localhost:8443/uat-demo-1.4.0.zip"
+
+
+def test_local_mode_starts_the_flaui_server_with_the_image_arguments(local_run):
+    local_run()
+
+    assert local_run.started["exe"] == "C:/flaui/FlaUiMcpServer.exe"
+    assert local_run.started["args"][:4] == ["--allowed-hosts", "localhost", "--state-root", "%APPDATA%\\UatDemo"]
+
+
+def test_local_mode_fails_the_run_on_a_failed_assertion(local_run, tmp_path):
+    (tmp_path / "scenarios" / "a.yaml").write_text(yaml.safe_dump({
+        "id": "a", "title": "a", "launch": {"executable": "a.exe"}, "instructions": "i",
+        "criteria": [{"id": "C1", "kind": "deterministic", "description": "d",
+                      "assertion": {"tool": "assert_element", "arguments": {"automationId": "X"}}}]}))
+    local_run.desktop.on("assert_element", {"pass": False, "message": "m", "actual": "x"})
+
+    rc, out = local_run()
+
+    assert rc == 1
+    assert '"status": "FAIL"' in (out / "report.json").read_text()
+
+
+def test_local_mode_needs_a_build(local_run, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["local", "--scenarios", ".", "--flaui-server", "x", "--allowed-hosts", "h",
+                  "--state-root", "s", "--run-id", "r"])

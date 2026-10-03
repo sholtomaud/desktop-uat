@@ -7,6 +7,12 @@ from pydantic import BaseModel, Field, model_validator
 
 ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$"
 CriterionStatus = Literal["PASS", "FAIL", "BLOCKED", "NOT_RUN"]
+# Who drove the app: the LLM agent (on AWS), or the scenario's own walkthrough (no agent).
+RunMode = Literal["agent", "walkthrough"]
+
+# Setup tools: the harness calls these before anything drives the app. The agent is
+# never given them, and a walkthrough may not call them.
+HARNESS_ONLY_TOOLS = ("install_build", "reset_app_state", "launch_app")
 
 
 # ----------------------------------------------------------------- scenario input
@@ -14,6 +20,17 @@ class ToolCall(BaseModel):
     """A call to a forwarded MCP tool (e.g. FlaUI) made by the harness, not the LLM."""
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class WalkStep(ToolCall):
+    """One deterministic step of a walkthrough; `capture` takes a labelled screenshot after it."""
+    capture: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _not_setup(self) -> "WalkStep":
+        if self.tool in HARNESS_ONLY_TOOLS:
+            raise ValueError(f"walkthrough step '{self.tool}' is harness-only; put it in setup or launch")
+        return self
 
 
 class Criterion(BaseModel):
@@ -48,6 +65,8 @@ class Scenario(BaseModel):
     instructions: str
     criteria: list[Criterion] = Field(min_length=1)
     explore: bool = True  # beta testing: also report issues outside the criteria
+    # Drives the app when there is no agent (`uat_harness local`). An agent run ignores it.
+    walkthrough: list[WalkStep] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> "Scenario":
@@ -82,7 +101,7 @@ class AgentVerdict(BaseModel):
 class Evidence(BaseModel):
     id: str
     label: str
-    s3_uri: str
+    s3_uri: Optional[str] = None  # None when there is no evidence bucket (local mode)
     local_path: str
     captured_at: str
 
@@ -114,10 +133,11 @@ class ScenarioResult(BaseModel):
 
 
 class BuildRef(BaseModel):
-    s3_uri: str
+    s3_uri: Optional[str] = None      # the staged copy, on AWS
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     name: str
     artifactory_uri: Optional[str] = None
+    source_url: Optional[str] = None  # where install_build fetched it, in local mode
 
 
 class RunContext(BaseModel):
@@ -137,6 +157,7 @@ class RunReport(BaseModel):
     git_sha: str
     build: BuildRef
     model_id: str
+    mode: RunMode = "agent"
     started_at: str
     ended_at: str
     status: Literal["PASS", "FAIL"]

@@ -148,7 +148,7 @@ def test_an_agent_crash_is_an_error_but_keeps_the_evidence_so_far(run):
 
     assert result.status == "ERROR"
     assert "RuntimeError: bedrock throttled" in result.error
-    assert [e.label for e in result.evidence] == ["app launched", "before crash"]
+    assert [e.label for e in result.evidence] == ["app launched", "before crash", "at error"]
     assert result.duration_seconds >= 0 and result.ended_at >= result.started_at
 
 

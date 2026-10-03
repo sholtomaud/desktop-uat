@@ -6,8 +6,10 @@ import logging
 import re
 import time
 import traceback
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional, Protocol
 from urllib.parse import urlparse
 
 import boto3
@@ -16,8 +18,8 @@ from botocore.config import Config
 from .agent import run_agent
 from .config import HarnessConfig
 from .evidence import EvidenceRecorder
-from .models import (AgentVerdict, Criterion, CriterionResult, RunContext, Scenario,
-                     ScenarioResult)
+from .models import (AgentVerdict, BuildRef, Criterion, CriterionResult, RunContext, RunMode,
+                     Scenario, ScenarioResult)
 from .session import DesktopSession, ToolError
 
 log = logging.getLogger(__name__)
@@ -73,8 +75,12 @@ def _run_deterministic(session: DesktopSession, c: Criterion) -> CriterionResult
     )
 
 
-def _merge(scenario: Scenario, verdict: AgentVerdict | None,
-           deterministic: dict[str, CriterionResult]) -> list[CriterionResult]:
+AWAITS_REVIEW = ("Not judged: walkthrough mode has no agent. Review the screenshots cited here "
+                 "against the criterion.")
+
+
+def _merge(scenario: Scenario, verdict: AgentVerdict | None, deterministic: dict[str, CriterionResult],
+           mode: RunMode = "agent", evidence_ids: Optional[list[str]] = None) -> list[CriterionResult]:
     by_id = {c.criterion_id: c for c in verdict.criteria} if verdict else {}
     out: list[CriterionResult] = []
     for c in scenario.criteria:
@@ -82,7 +88,11 @@ def _merge(scenario: Scenario, verdict: AgentVerdict | None,
             out.append(deterministic[c.id])
             continue
         v = by_id.get(c.id)
-        if v is None:
+        if v is None and mode == "walkthrough":
+            out.append(CriterionResult(criterion_id=c.id, description=c.description, kind="visual",
+                                       status="NOT_RUN", source="harness", observation=AWAITS_REVIEW,
+                                       evidence=list(evidence_ids or [])))
+        elif v is None:
             out.append(CriterionResult(criterion_id=c.id, description=c.description, kind="visual",
                                        status="NOT_RUN", source="harness",
                                        observation="agent produced no accepted verdict for this criterion"))
@@ -93,7 +103,64 @@ def _merge(scenario: Scenario, verdict: AgentVerdict | None,
     return out
 
 
+def scenario_passed(criteria: list[CriterionResult], mode: RunMode) -> bool:
+    """In walkthrough mode an unjudged visual criterion is pending review, not a failure."""
+    return all(c.status == "PASS" or (mode == "walkthrough" and c.kind == "visual" and c.status == "NOT_RUN")
+               for c in criteria)
+
+
+def run_walkthrough(session: DesktopSession, recorder: EvidenceRecorder, scenario: Scenario) -> None:
+    for step in scenario.walkthrough:
+        session.call_ok(step.tool, step.arguments)
+        if step.capture:
+            recorder.capture(step.capture)
+
+
+# ----------------------------------------------------------------- where a scenario runs
+class Backend(Protocol):
+    """What differs between a run on AWS and one on a local Windows machine."""
+    mode: RunMode
+
+    def session(self, user_id: str) -> AbstractContextManager[DesktopSession]: ...
+    def build_url(self, build: BuildRef) -> str: ...
+    def recorder(self, session: DesktopSession, run_id: str, scenario_id: str, local_dir: Path) -> EvidenceRecorder: ...
+    def session_opened(self, ctx: RunContext, scenario: Scenario, user_id: str) -> None: ...
+    def drive(self, session: DesktopSession, recorder: EvidenceRecorder, scenario: Scenario) -> AgentVerdict | None: ...
+
+
+class AwsBackend:
+    """WorkSpaces agent access, S3 evidence, a presigned build, the Bedrock agent."""
+    mode: RunMode = "agent"
+
+    def __init__(self, cfg: HarnessConfig):
+        self.cfg = cfg
+
+    def session(self, user_id):
+        return DesktopSession(self.cfg, user_id)
+
+    def build_url(self, build):
+        return presign(self.cfg, build.s3_uri)
+
+    def recorder(self, session, run_id, scenario_id, local_dir):
+        return EvidenceRecorder(session, boto3.client("s3", region_name=self.cfg.region), self.cfg.evidence_bucket,
+                                f"runs/{run_id}/{scenario_id}", local_dir)
+
+    def session_opened(self, ctx, scenario, user_id):
+        if ctx.observe:
+            try:
+                _publish_observer_link(self.cfg, ctx, scenario, user_id)
+            except Exception as e:  # observing is best-effort
+                log.warning("could not publish observer link: %s", e)
+
+    def drive(self, session, recorder, scenario):
+        return run_agent(session, recorder, scenario, self.cfg)
+
+
 def run_scenario(scenario: Scenario, cfg: HarnessConfig, ctx: RunContext) -> ScenarioResult:
+    return execute(scenario, ctx, AwsBackend(cfg))
+
+
+def execute(scenario: Scenario, ctx: RunContext, backend: Backend) -> ScenarioResult:
     user_id = session_user_id(ctx.run_id, scenario.id)
     started, t0 = _now(), time.monotonic()
     result = ScenarioResult(scenario_id=scenario.id, title=scenario.title, status="ERROR",
@@ -101,44 +168,42 @@ def run_scenario(scenario: Scenario, cfg: HarnessConfig, ctx: RunContext) -> Sce
                             session_user_id=user_id)
     recorder: EvidenceRecorder | None = None
     try:
-        with DesktopSession(cfg, user_id) as session:
-            if ctx.observe:
-                try:
-                    _publish_observer_link(cfg, ctx, scenario, user_id)
-                except Exception as e:  # observing is best-effort
-                    log.warning("could not publish observer link: %s", e)
+        with backend.session(user_id) as session:
+            backend.session_opened(ctx, scenario, user_id)
+            recorder = backend.recorder(session, ctx.run_id, scenario.id,
+                                        Path(ctx.out_dir) / "evidence" / scenario.id)
+            try:
+                # Deterministic setup: nothing that drives the app can call these tools.
+                install_args = {"url": backend.build_url(ctx.build), "sha256": ctx.build.sha256}
+                if scenario.installer_args:
+                    install_args["installerArgs"] = scenario.installer_args
+                session.call_ok("install_build", install_args)
+                for step in scenario.setup:
+                    session.call_ok(step.tool, step.arguments)
+                session.call_ok("launch_app", {
+                    "executablePath": scenario.launch.executable,
+                    "arguments": scenario.launch.arguments,
+                    "mainWindowTimeoutSeconds": scenario.launch.main_window_timeout_seconds,
+                })
+                recorder.capture("app launched")
 
-            recorder = EvidenceRecorder(
-                session, boto3.client("s3", region_name=cfg.region), cfg.evidence_bucket,
-                f"runs/{ctx.run_id}/{scenario.id}", Path(ctx.out_dir) / "evidence" / scenario.id,
-            )
+                verdict = backend.drive(session, recorder, scenario)
 
-            # Deterministic setup: the LLM is not involved and cannot call these tools.
-            install_args = {"url": presign(cfg, ctx.build.s3_uri), "sha256": ctx.build.sha256}
-            if scenario.installer_args:
-                install_args["installerArgs"] = scenario.installer_args
-            session.call_ok("install_build", install_args)
-            for step in scenario.setup:
-                session.call_ok(step.tool, step.arguments)
-            session.call_ok("launch_app", {
-                "executablePath": scenario.launch.executable,
-                "arguments": scenario.launch.arguments,
-                "mainWindowTimeoutSeconds": scenario.launch.main_window_timeout_seconds,
-            })
-            recorder.capture("app launched")
+                # Exact assertions run afterwards, against the state the app was left in.
+                det = {c.id: _run_deterministic(session, c) for c in scenario.criteria if c.kind == "deterministic"}
+                recorder.capture("final state")
+            except Exception:
+                try:  # a picture of the moment it went wrong
+                    recorder.capture("at error")
+                except Exception:
+                    pass
+                raise
 
-            verdict = run_agent(session, recorder, scenario, cfg)
-
-            # Exact assertions run after the agent, against the state it left behind.
-            det = {c.id: _run_deterministic(session, c) for c in scenario.criteria if c.kind == "deterministic"}
-            recorder.capture("final state")
-
-            result.criteria = _merge(scenario, verdict, det)
+            result.criteria = _merge(scenario, verdict, det, backend.mode, [e.id for e in recorder.items])
             if verdict:
                 result.findings = verdict.findings
                 result.agent_summary = verdict.summary
-            ok = all(c.status == "PASS" for c in result.criteria)
-            result.status = "PASS" if ok else "FAIL"
+            result.status = "PASS" if scenario_passed(result.criteria, backend.mode) else "FAIL"
     except Exception as e:
         log.error("scenario %s errored: %s", scenario.id, e)
         result.status = "ERROR"

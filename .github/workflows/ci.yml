@@ -66,6 +66,10 @@ jobs:
       - name: Harness dependencies
         run: python -m pip install --quiet -r harness/requirements-dev.txt
 
+      - name: Unpack the FlaUI server
+        shell: pwsh
+        run: Expand-Archive -Path dist\flaui-mcp-server.zip -DestinationPath "$env:RUNNER_TEMP\flaui"
+
       # install_build only downloads over HTTPS from an allow-listed host. The test
       # serves the zip from localhost, so the machine has to trust a localhost cert.
       - name: Localhost certificate
@@ -89,6 +93,59 @@ jobs:
           export UAT_DEMO_ZIP="$GITHUB_WORKSPACE/dist/uat-demo-$version.zip"
           export UAT_TLS_CERT="$RUNNER_TEMP/cert.pem" UAT_TLS_KEY="$RUNNER_TEMP/key.pem"
           python -m pytest tests/windows -v -p no:cacheprovider
+
+      # The worked scenario, end to end, as a UAT run without AWS: the harness installs
+      # and launches UAT Demo, its walkthrough drives it, screenshots are taken at each
+      # step, deterministic criteria are judged. Visual criteria await review.
+      - name: UAT walkthrough (no agent)
+        id: walkthrough
+        if: success() || failure()
+        shell: bash
+        working-directory: harness
+        run: |
+          version=$(tr -d '\r\n' < ../example-app/VERSION)
+          python -m uat_harness.cli local \
+            --scenarios scenarios \
+            --flaui-server "$RUNNER_TEMP/flaui/FlaUiMcpServer.exe" \
+            --allowed-hosts localhost \
+            --state-root '%APPDATA%\UatDemo' \
+            --log-root "$RUNNER_TEMP/uat-logs" \
+            --build-file "../dist/uat-demo-$version.zip" \
+            --tls-cert "$RUNNER_TEMP/cert.pem" --tls-key "$RUNNER_TEMP/key.pem" \
+            --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --git-ref "$GITHUB_REF" --git-sha "$GITHUB_SHA" \
+            --out ../reports
+
+      - name: Job summary
+        if: always() && steps.walkthrough.outcome != 'skipped'
+        shell: bash
+        run: |
+          if [ -f reports/summary.md ]; then cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else echo "No UAT report was produced; see the step log." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload the UAT report
+        id: report
+        if: always() && steps.walkthrough.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Screenshots cannot be inlined in a job summary (no data: URIs, and artifact
+      # URLs need a login), so the summary links straight to the artifact; its
+      # report.html has every screenshot embedded.
+      - name: Link the report from the summary
+        if: always() && steps.report.outputs.artifact-url != ''
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.report.outputs.artifact-url }}
+        run: |
+          {
+            echo ""
+            echo "**[Download the UAT report]($ARTIFACT_URL)**: unzip it and open \`report.html\` to see every screenshot."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # A failing UI test is far easier to read with a picture of the desktop.
       - name: Screenshot on failure

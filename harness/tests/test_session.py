@@ -27,7 +27,7 @@ def test_an_unknown_tool_names_what_is_available(cfg, desktop):
 
 
 def test_an_ambiguous_suffix_is_refused_rather_than_guessed(cfg, desktop):
-    desktop.tools += FakeDesktop(namespace="other.").tools[-1:]  # a second *.dump_ui_tree
+    desktop.tools += [t for t in FakeDesktop(namespace="other.").tools if t.tool_name == "other.dump_ui_tree"]
     s = open_session(cfg, desktop)
 
     with pytest.raises(ToolError, match="ambiguous"):

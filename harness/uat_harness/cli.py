@@ -112,9 +112,7 @@ def cmd_run(a) -> int:
                        totals={}, scenarios=results)
     report.totals = totals(report)
     write_all(report, out)
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        for line in workflow_annotations(report):
-            print(line, flush=True)
+    _emit_annotations(report)
 
     # Mirror the report next to the screenshots for audit.
     import boto3
@@ -122,6 +120,60 @@ def cmd_run(a) -> int:
     for name in ("report.json", "junit.xml", "summary.md"):
         s3.upload_file(str(out / name), cfg.evidence_bucket, f"runs/{a.run_id}/{name}")
 
+    print(json.dumps(report.totals), flush=True)
+    return 0 if report.status == "PASS" else 1
+
+
+def _emit_annotations(report: RunReport) -> None:
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        for line in workflow_annotations(report):
+            print(line, flush=True)
+
+
+def cmd_local(a) -> int:
+    """Run scenarios on this Windows machine: the FlaUI server over stdio, the walkthrough
+    driving, screenshots from this desktop. No AWS, no agent. One desktop, so one at a time."""
+    import hashlib
+    from contextlib import ExitStack
+    from urllib.parse import urlparse
+
+    from . import local
+    from .runner import execute
+
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    scenarios = load_scenarios(Path(a.scenarios), {t.strip() for t in a.tags.split(",") if t.strip()})
+    if not scenarios:
+        print("no scenarios matched", file=sys.stderr)
+        return 2
+
+    with ExitStack() as stack:
+        if a.build_file:
+            build_file = Path(a.build_file)
+            sha256 = a.build_sha256 or hashlib.sha256(build_file.read_bytes()).hexdigest()
+            url = stack.enter_context(local.serve_over_https(build_file, Path(a.tls_cert), Path(a.tls_key)))
+        else:
+            sha256, url = a.build_sha256, a.build_url
+        build = BuildRef(sha256=sha256, name=Path(urlparse(url).path).name, source_url=url)
+        ctx = RunContext(run_id=a.run_id, git_ref=a.git_ref, git_sha=a.git_sha, out_dir=str(out.resolve()),
+                         build=build)
+
+        server_args = local.flaui_server_args(a.allowed_hosts, a.state_root, a.log_root, a.install_root)
+        backend = local.LocalBackend(
+            lambda user_id: local.LocalDesktopSession(lambda: local.flaui_stdio_client(a.flaui_server, server_args),
+                                                      capture=lambda: local.capture_screen()),
+            url)
+        print(f"running {len(scenarios)} scenario(s) locally (walkthrough, no agent)", flush=True)
+        started = _now()
+        results = [execute(s, ctx, backend) for _, s in scenarios]
+
+    report = RunReport(run_id=a.run_id, git_ref=a.git_ref, git_sha=a.git_sha, build=build, model_id="",
+                       mode="walkthrough", started_at=started, ended_at=_now(),
+                       status="PASS" if all(r.status == "PASS" for r in results) else "FAIL",
+                       totals={}, scenarios=results)
+    report.totals = totals(report)
+    write_all(report, out)
+    _emit_annotations(report)
     print(json.dumps(report.totals), flush=True)
     return 0 if report.status == "PASS" else 1
 
@@ -158,7 +210,32 @@ def main(argv: list[str] | None = None) -> int:
     one.add_argument("--result", required=True)
     one.set_defaults(fn=cmd_scenario)
 
+    lo = sub.add_parser("local", help="run on this Windows machine: walkthrough-driven, no AWS, no agent")
+    lo.add_argument("--scenarios", required=True)
+    lo.add_argument("--tags", default="")
+    lo.add_argument("--flaui-server", required=True, help="path to FlaUiMcpServer.exe")
+    lo.add_argument("--allowed-hosts", required=True, help="hosts install_build may download from")
+    lo.add_argument("--state-root", required=True, help="what reset_app_state may delete, e.g. %%APPDATA%%\\UatDemo")
+    lo.add_argument("--log-root", default=None)
+    lo.add_argument("--install-root", default=None)
+    build = lo.add_mutually_exclusive_group(required=True)
+    build.add_argument("--build-url", help="an HTTPS URL on an allowed host (needs --build-sha256)")
+    build.add_argument("--build-file", help="served from localhost over HTTPS (needs --tls-cert/--tls-key)")
+    lo.add_argument("--build-sha256", default=None)
+    lo.add_argument("--tls-cert")
+    lo.add_argument("--tls-key")
+    lo.add_argument("--run-id", required=True)
+    lo.add_argument("--git-ref", default="")
+    lo.add_argument("--git-sha", default="")
+    lo.add_argument("--out", default="reports")
+    lo.set_defaults(fn=cmd_local)
+
     a = p.parse_args(argv)
+    if a.cmd == "local":
+        if a.build_url and not a.build_sha256:
+            p.error("--build-url needs --build-sha256")
+        if a.build_file and not (a.tls_cert and a.tls_key):
+            p.error("--build-file needs --tls-cert and --tls-key")
     return a.fn(a)
 
 
