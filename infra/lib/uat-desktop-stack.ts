@@ -152,8 +152,8 @@ export class UatDesktopStack extends cdk.Stack {
       stackName: c.stack.name,
     });
     // Names are plain strings, so CloudFormation cannot infer ordering on its own.
-    assoc.addDependency(fleet);
-    assoc.addDependency(stack);
+    assoc.addResourceDependency(fleet);
+    assoc.addResourceDependency(stack);
 
     // ---------------------------------------------------------------- Optional image builder
     if (c.createImageBuilder) {

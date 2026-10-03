@@ -66,11 +66,31 @@ test('it is wired to this fleet, stack and lease parameter', () => {
   expect(lambdaEnv.LEASE_PARAM).toMatch(/\/fleet-lease$/);
 });
 
+// The janitor logs one JSON line when it stops a fleet; capture it rather than print it.
+let logged: string[];
+beforeEach(() => {
+  logged = [];
+  jest.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')); });
+});
+afterEach(() => jest.restoreAllMocks());
+
 test('an idle, unleased, running fleet is stopped', async () => {
   const { handler, sent } = janitor({ state: 'RUNNING', lease: '0', sessions: 0 });
 
   expect(await handler()).toEqual({ action: 'stopped' });
   expect(sent.find(c => c.name === 'StopFleet')!.input).toEqual({ Name: config.fleet.name });
+});
+
+test('stopping a fleet leaves a structured line in its log', async () => {
+  await janitor({ state: 'RUNNING', lease: '0' }).handler();
+
+  expect(logged.map(l => JSON.parse(l))).toEqual([{ action: 'stopped', fleet: config.fleet.name }]);
+});
+
+test('leaving a fleet alone logs nothing', async () => {
+  await janitor({ state: 'RUNNING', lease: String(now() + 3600) }).handler();
+
+  expect(logged).toEqual([]);
 });
 
 test('an expired lease does not protect the fleet', async () => {

@@ -23,7 +23,14 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "roots": ["<rootDir>/test"],
-    "transform": { "^.+\\.tsx?$": "ts-jest" }
+    "roots": [
+      "<rootDir>/test"
+    ],
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
+    "setupFiles": [
+      "<rootDir>/test/setup.ts"
+    ]
   }
 }
