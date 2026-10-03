@@ -1,6 +1,6 @@
 # Lock these with `pip-compile` (pip-tools) before production use and install with --require-hashes.
 strands-agents>=1.0.0
 mcp-proxy-for-aws>=1.0.0
-boto3>=1.40.0
+boto3>=1.43.106
 pydantic>=2.13.5
 PyYAML>=6.0
