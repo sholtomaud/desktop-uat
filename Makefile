@@ -52,9 +52,10 @@ image: start ## Build the dev image (node:$(NODE_VERSION)-bookworm-slim + Python
 # infra/ — the CDK app
 # --------------------------------------------------
 
+# The touch is inside the container: under Docker (CI) the directory is root's,
+# and a touch from the host is refused.
 infra/node_modules: infra/package-lock.json
-	$(INFRA) npm ci --no-audit --no-fund
-	@touch $@
+	$(INFRA) sh -c 'npm ci --no-audit --no-fund && touch node_modules'
 
 install: start infra/node_modules ## npm ci for infra/, inside the container
 
