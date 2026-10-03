@@ -99,12 +99,20 @@ def _markdown(r: RunReport) -> str:
         ev = {e.id: _artifact_path(s.scenario_id, e.local_path) for e in s.evidence}
         lines += ["", f"### {s.scenario_id}: {s.title}"]
         for c in bad:
+            if walkthrough and c.kind == "visual" and c.status == "NOT_RUN":
+                # It cites every screenshot; they are listed once, in the table below.
+                lines.append(f"- {ICON[c.status]} **{c.criterion_id}** ({c.source}) awaits review against the "
+                             f"screenshots below: {_md_escape(c.description)}")
+                continue
             refs = ", ".join(f"`{e}` `{ev[e]}`" if e in ev else f"`{e}`" for e in c.evidence) or "no evidence"
             lines.append(f"- {ICON[c.status]} **{c.criterion_id}** ({c.source}) {_md_escape(c.observation)} "
                          f"{'· actual: `' + c.actual + '`' if c.actual else ''} · {refs}")
         for f in s.findings:
             lines.append(f"- 🔎 **{f.severity}** {_md_escape(f.title)}: {_md_escape(f.description)[:300]} "
                          f"({', '.join(f.evidence) or 'no evidence'})")
+        if walkthrough and s.evidence:
+            lines += ["", "| Screenshot | Step | In the artifact |", "|---|---|---|"]
+            lines += [f"| `{e.id}` | {_md_escape(e.label)} | `{ev[e.id]}` |" for e in s.evidence]
     lines += ["", "> Agent verdicts are advisory. Release sign-off is the `uat-signoff` environment approval."]
     return "\n".join(lines) + "\n"
 

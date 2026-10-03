@@ -251,8 +251,18 @@ def test_a_walkthrough_summary_says_visual_criteria_await_review(walkthrough_rep
     md = (tmp_path / "summary.md").read_text()
     assert md.startswith("## Desktop UAT ✅ PASS · walkthrough (no agent)")
     assert "Visual criteria are not judged in walkthrough mode" in md
-    assert "`E001` `evidence/smoke/E001-dashboard.png`" in md
     assert "s3://" not in md
+
+
+def test_a_walkthrough_summary_lists_each_screenshot_once_as_a_table(walkthrough_report, tmp_path):
+    """Every unjudged visual criterion cites every screenshot; repeating the list per criterion
+    buries the summary. The criteria point at one table instead."""
+    write_all(walkthrough_report, tmp_path)
+
+    md = (tmp_path / "summary.md").read_text()
+    assert md.count("evidence/smoke/E001-dashboard.png") == 1
+    assert "| `E001` | dashboard & more | `evidence/smoke/E001-dashboard.png` |" in md
+    assert "**C1** (harness) awaits review against the screenshots below" in md
 
 
 def test_in_walkthrough_mode_unjudged_visual_criteria_are_notices_not_errors(walkthrough_report):
