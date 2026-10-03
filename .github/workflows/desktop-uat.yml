@@ -1,0 +1,168 @@
+name: Desktop UAT (agentic beta)
+
+# Triggers
+#  - repository_dispatch "artifactory-release": sent by an Artifactory webhook when a build is
+#    deployed/promoted to the release repo. Payload: {"repo": "...", "path": "app/1.4.0/App-1.4.0.msi"}
+#  - workflow_dispatch: manual run / re-run against any released artifact
+#  - push to release/**: optional; resolves the artifact from repo variables (see README).
+#    Left commented out so a release doesn't run twice when the webhook is also configured.
+on:
+  repository_dispatch:
+    types: [artifactory-release]
+  workflow_dispatch:
+    inputs:
+      artifactory_repo:
+        description: Artifactory repository key
+        required: true
+        default: desktop-releases
+      artifactory_path:
+        description: Path inside the repo, e.g. app/1.4.0/App-1.4.0.msi
+        required: true
+      scenario_tags:
+        description: Comma-separated scenario tags (empty = all)
+        required: false
+        default: ""
+      observe:
+        description: Publish VIEW_STOP observer links to SSM so testers can watch / stop the agent
+        type: boolean
+        default: false
+#  push:
+#    branches: ["release/**"]
+
+permissions:
+  contents: read
+
+# One shared fleet: never let two runs start/stop it under each other.
+concurrency:
+  group: desktop-uat-fleet
+  cancel-in-progress: false
+
+jobs:
+  uat:
+    name: Agentic UAT
+    runs-on: [self-hosted, linux, desktop-uat]
+    timeout-minutes: 240
+    outputs:
+      verdict: ${{ steps.harness.outputs.verdict }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load runner environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -E '^(REGION|UAT_SSM_PREFIX|ARTIFACTORY_URL|ARTIFACTORY_SECRET_ID)=' /etc/desktop-uat-runner.env >> "$GITHUB_ENV"
+          echo "AWS_REGION=$(grep '^REGION=' /etc/desktop-uat-runner.env | cut -d= -f2)" >> "$GITHUB_ENV"
+
+      # All event data goes through env vars, never ${{ }} inside the script (prevents injection).
+      # The validation lives in the script so it is tested: tests/test_resolve_artifact.py.
+      - name: Resolve release artifact
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_REPO: ${{ github.event.client_payload.repo }}
+          DISPATCH_PATH: ${{ github.event.client_payload.path }}
+          INPUT_REPO: ${{ inputs.artifactory_repo }}
+          INPUT_PATH: ${{ inputs.artifactory_path }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_REPO: ${{ vars.UAT_ARTIFACTORY_REPO }}
+          PATH_TEMPLATE: ${{ vars.UAT_ARTIFACT_PATH_TEMPLATE }}
+        run: scripts/resolve-artifact.sh
+
+      - name: Stage from Artifactory (verify sha256)
+        id: stage
+        shell: bash
+        env:
+          ART_REPO: ${{ steps.resolve.outputs.repo }}
+          ART_PATH: ${{ steps.resolve.outputs.path }}
+        run: scripts/stage-from-artifactory.sh "$ART_REPO" "$ART_PATH"
+
+      - name: Python environment
+        shell: bash
+        working-directory: harness
+        env:
+          PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+        run: |
+          set -euo pipefail
+          [ -z "${PIP_INDEX_URL:-}" ] && unset PIP_INDEX_URL
+          "${UAT_PYTHON:-python3.11}" -m venv ../.venv
+          ../.venv/bin/pip install --quiet --upgrade pip
+          ../.venv/bin/pip install --quiet -r requirements.txt
+          ../.venv/bin/python -m uat_harness.cli validate --scenarios scenarios
+
+      - name: Start fleet
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/fleet.sh lease 14400
+          scripts/fleet.sh start
+
+      - name: Run agentic UAT
+        id: harness
+        shell: bash
+        working-directory: harness
+        env:
+          TAGS: ${{ inputs.scenario_tags }}
+          OBSERVE: ${{ inputs.observe }}
+          BUILD_S3_URI: ${{ steps.stage.outputs.build_s3_uri }}
+          BUILD_SHA256: ${{ steps.stage.outputs.build_sha256 }}
+          BUILD_NAME: ${{ steps.stage.outputs.build_name }}
+          ARTIFACTORY_URI: ${{ steps.stage.outputs.artifactory_uri }}
+        run: |
+          set -uo pipefail
+          OBS=(); [ "${OBSERVE:-false}" = "true" ] && OBS=(--observe)
+          ../.venv/bin/python -m uat_harness.cli run \
+            --ssm-prefix "$UAT_SSM_PREFIX" \
+            --scenarios scenarios \
+            --tags "${TAGS:-}" \
+            --build-s3-uri "$BUILD_S3_URI" \
+            --build-sha256 "$BUILD_SHA256" \
+            --build-name "$BUILD_NAME" \
+            --artifactory-uri "$ARTIFACTORY_URI" \
+            --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --git-ref "$GITHUB_REF" --git-sha "$GITHUB_SHA" \
+            --out ../reports "${OBS[@]}"
+          rc=$?
+          if [ $rc -eq 0 ]; then echo "verdict=PASS" >> "$GITHUB_OUTPUT"; else echo "verdict=FAIL" >> "$GITHUB_OUTPUT"; fi
+          exit $rc
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f reports/summary.md ]; then cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else echo "No UAT report produced - see logs." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      # GHES does not support actions/upload-artifact@v4; use v3 there.
+      - name: Upload report and evidence
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: desktop-uat-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          retention-days: 30
+
+      - name: Stop fleet
+        if: always()
+        shell: bash
+        run: |
+          scripts/fleet.sh stop || true
+          scripts/fleet.sh release || true
+
+  signoff:
+    name: Human UAT sign-off
+    needs: uat
+    if: needs.uat.result == 'success'
+    runs-on: [self-hosted, linux, desktop-uat]
+    # Configure required reviewers on this environment (Settings > Environments).
+    # The approval is the release sign-off; the agent's verdict is advisory input to it.
+    environment: uat-signoff
+    steps:
+      - name: Record sign-off
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "UAT signed off for run $RUN_URL" | tee -a "$GITHUB_STEP_SUMMARY"

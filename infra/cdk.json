@@ -1,0 +1,63 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "context": {
+    "uat": {
+      "envName": "prod",
+      "account": "111122223333",
+      "region": "ap-southeast-2",
+      "vpcCidr": "10.60.0.0/16",
+      "maxAzs": 2,
+      "natGateways": 2,
+      "interfaceEndpoints": [
+        "sts",
+        "bedrock-runtime",
+        "ssm",
+        "ssmmessages",
+        "ec2messages",
+        "logs",
+        "secretsmanager",
+        "kms",
+        "appstream.api"
+      ],
+      "fleet": {
+        "name": "desktop-uat-fleet",
+        "imageName": "desktop-uat-base-2026-10-01",
+        "instanceType": "stream.standard.large",
+        "maxConcurrentSessions": 2,
+        "maxSessionSeconds": 7200
+      },
+      "stack": {
+        "name": "desktop-uat-agent-stack",
+        "userControlMode": "VIEW_STOP",
+        "screenImageFormat": "PNG"
+      },
+      "bedrockModelId": "global.anthropic.claude-sonnet-4-6",
+      "evidenceRetentionDays": 180,
+      "buildRetentionDays": 30,
+      "janitorIdleMinutes": 45,
+      "createImageBuilder": false,
+      "imageBuilderBaseImage": "AppStream-WinServer2022-09-01-2026",
+      "artifactory": {
+        "baseUrl": "https://artifactory.example.internal/artifactory",
+        "tokenSecretName": "desktop-uat/artifactory-token"
+      },
+      "runner": {
+        "ghesUrl": "https://ghes.example.internal",
+        "scope": "org",
+        "target": "your-org",
+        "labels": [
+          "self-hosted",
+          "linux",
+          "desktop-uat"
+        ],
+        "instanceType": "m7i.large",
+        "minCapacity": 1,
+        "maxCapacity": 2,
+        "runnerVersion": "2.328.0",
+        "runnerDownloadUrl": "",
+        "tokenSecretName": "desktop-uat/ghes-runner-token"
+      }
+    },
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
+  }
+}
