@@ -1,0 +1,38 @@
+# Dependency updates arrive as PRs, and CI's `make check` vets each one.
+#
+# Not covered here: the Node and Python base image (Containerfile takes
+# NODE_VERSION from .node-version, which Dependabot cannot follow) and the
+# pinned tool images in the Makefile (actionlint, the .NET SDK). Bump those by hand.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /infra
+    schedule:
+      interval: weekly
+    groups:
+      # aws-cdk-lib bundles its own dependencies (minimatch, brace-expansion…), so
+      # a security fix inside it only ever arrives as an aws-cdk-lib release.
+      cdk:
+        patterns: ["aws-cdk", "aws-cdk-lib", "constructs"]
+      test-tooling:
+        patterns: ["jest", "ts-jest", "@types/*", "ts-node", "typescript"]
+
+  - package-ecosystem: pip
+    directory: /harness
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: nuget
+    directory: /image/flaui-mcp-server
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # desktop-uat.yml runs on GHES, which does not support upload-artifact@v4+.
+      # (This also holds ci.yml's copy at its current major; bump that by hand.)
+      - dependency-name: actions/upload-artifact
+        update-types: ["version-update:semver-major"]

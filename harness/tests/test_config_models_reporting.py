@@ -9,7 +9,7 @@ from uat_harness import config as config_mod
 from uat_harness.config import HarnessConfig
 from uat_harness.models import (BuildRef, CriterionResult, Evidence, Finding, RunReport,
                                 ScenarioResult)
-from uat_harness.reporting import totals, write_all
+from uat_harness.reporting import totals, workflow_annotations, write_all
 
 PARAMS = {
     "region": "ap-southeast-2", "fleet-name": "f", "stack-name": "s", "evidence-bucket": "e",
@@ -113,8 +113,9 @@ def report():
                       result("bad", "FAIL", crit("C1", "FAIL", observation="pipe | in\ntext", evidence=["E001"]),
                              crit("C2", "BLOCKED"),
                              findings=[Finding(severity="major", title="crash", description="boom")],
-                             evidence=[Evidence(id="E001", label="l", s3_uri="s3://e/E001.png",
-                                                local_path="p", captured_at="t")]),
+                             evidence=[Evidence(id="E001", label="login", s3_uri="s3://ev/runs/42-1/bad/E001-login.png",
+                                                local_path="/w/reports/evidence/bad/E001-login.png",
+                                                captured_at="t")]),
                       result("boom", "ERROR", error="TimeoutError: desktop not ready"),
                   ])
     r.totals = totals(r)
@@ -137,12 +138,11 @@ def test_junit_marks_non_passing_criteria_and_errored_scenarios(report, tmp_path
     assert suites["boom"].find("testcase/error").text == "TimeoutError: desktop not ready"
 
 
-def test_the_summary_links_evidence_and_keeps_its_table_intact(report, tmp_path):
+def test_the_summary_keeps_its_table_intact(report, tmp_path):
     write_all(report, tmp_path)
 
     md = (tmp_path / "summary.md").read_text()
     assert md.startswith("## Desktop UAT ❌ FAIL")
-    assert "[E001](s3://e/E001.png)" in md
     assert "pipe \\| in text" in md
     assert "**major** crash" in md
     for line in md.splitlines():
@@ -154,3 +154,75 @@ def test_report_json_round_trips(report, tmp_path):
     write_all(report, tmp_path)
 
     assert RunReport.model_validate_json((tmp_path / "report.json").read_text()) == report
+
+
+def test_evidence_is_cited_by_its_path_in_the_report_artifact(report, tmp_path):
+    """A browser cannot open s3://. The screenshots are in the job artifact under evidence/."""
+    write_all(report, tmp_path)
+
+    md = (tmp_path / "summary.md").read_text()
+    assert "`E001` `evidence/bad/E001-login.png`" in md
+    assert "s3://ev/runs/42-1/bad/E001-login.png" not in md.split("### ")[1]  # not as a link per criterion
+    assert "`s3://ev/runs/42-1/`" in md  # the audit copy is named once
+
+
+def test_a_report_without_evidence_names_no_bucket(tmp_path):
+    r = RunReport(run_id="1", git_ref="", git_sha="", build=BuildRef(s3_uri="s3://b/k", sha256=SHA, name="n"),
+                  model_id="m", started_at="t", ended_at="t", status="PASS", totals={}, scenarios=[])
+    r.totals = totals(r)
+    write_all(r, tmp_path)
+
+    assert "s3://" not in (tmp_path / "summary.md").read_text()
+
+
+# ----------------------------------------------------------------- annotations
+def test_every_non_passing_criterion_is_an_error_annotation(report):
+    errors = [a for a in workflow_annotations(report) if a.startswith("::error ")]
+
+    assert "::error title=UAT bad C1 FAIL::desc C1: pipe | in%0Atext (agent; evidence E001)" in errors
+    assert "::error title=UAT bad C2 BLOCKED::desc C2: obs (agent; no evidence)" in errors
+    assert not any("ok" in e.split("::")[1] for e in errors)
+
+
+def test_an_errored_scenario_is_one_error_annotation(report):
+    assert "::error title=UAT boom ERROR::TimeoutError: desktop not ready" in workflow_annotations(report)
+
+
+@pytest.mark.parametrize("severity, level", [("critical", "warning"), ("major", "warning"),
+                                             ("minor", "notice"), ("cosmetic", "notice")])
+def test_findings_are_warnings_or_notices_by_severity(report, severity, level):
+    report.scenarios[1].findings = [Finding(severity=severity, title="t", description="d", evidence=["E001"])]
+
+    found = [a for a in workflow_annotations(report) if "finding" in a]
+
+    assert found == [f"::{level} title=UAT bad finding ({severity})::t: d (evidence E001)"]
+
+
+def test_errors_come_first_so_the_per_step_cap_keeps_them():
+    """GitHub shows at most 10 annotations of each level per step."""
+    r = RunReport(run_id="1", git_ref="", git_sha="", build=BuildRef(s3_uri="s3://b/k", sha256=SHA, name="n"),
+                  model_id="m", started_at="t", ended_at="t", status="FAIL", totals={}, scenarios=[
+                      result("s", "FAIL", crit("C1", "FAIL"),
+                             findings=[Finding(severity="minor", title="t", description="d")])])
+
+    levels = [a.split(" ", 1)[0] for a in workflow_annotations(r)]
+
+    assert levels == ["::error", "::notice"]
+
+
+def test_annotation_text_cannot_break_out_of_the_workflow_command():
+    """Observations come from the LLM. A newline must not start a new ::command::."""
+    r = RunReport(run_id="1", git_ref="", git_sha="", build=BuildRef(s3_uri="s3://b/k", sha256=SHA, name="n"),
+                  model_id="m", started_at="t", ended_at="t", status="FAIL", totals={}, scenarios=[
+                      result("s", "FAIL", crit("C1:x,y", "FAIL", observation="50%\r\n::add-mask::secret"))])
+
+    [line] = workflow_annotations(r)
+
+    assert "\n" not in line and "\r" not in line
+    assert line == "::error title=UAT s C1%3Ax%2Cy FAIL::desc C1:x,y: 50%25%0D%0A::add-mask::secret (agent; no evidence)"
+
+
+def test_a_passing_run_annotates_nothing(report):
+    report.scenarios = report.scenarios[:1]
+
+    assert workflow_annotations(report) == []

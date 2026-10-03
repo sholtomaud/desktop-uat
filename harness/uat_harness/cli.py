@@ -15,7 +15,7 @@ import yaml
 
 from .config import HarnessConfig
 from .models import BuildRef, RunContext, RunReport, Scenario, ScenarioResult
-from .reporting import schema_json, totals, write_all
+from .reporting import schema_json, totals, workflow_annotations, write_all
 
 # Generous allowance on top of the scenario timeout for desktop provisioning + install.
 PROVISION_ALLOWANCE = 900
@@ -112,6 +112,9 @@ def cmd_run(a) -> int:
                        totals={}, scenarios=results)
     report.totals = totals(report)
     write_all(report, out)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        for line in workflow_annotations(report):
+            print(line, flush=True)
 
     # Mirror the report next to the screenshots for audit.
     import boto3
