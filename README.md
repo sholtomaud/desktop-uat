@@ -127,6 +127,27 @@ Each scenario runs in a fresh desktop: install, then setup, then launch, then ag
   providers). That is the single biggest reliability win.
 - Validate locally: `make harness-validate`
 
+## Reports
+
+Each run writes `reports/`. The workflow uploads it as the job artifact
+`desktop-uat-<run>-<attempt>`, which keeps it for 30 days.
+
+| File | For |
+|---|---|
+| `summary.md` | the run's job summary page: results table, failed criteria, findings |
+| `report.json` | machine-readable, validated by `harness/report.schema.json` |
+| `junit.xml` | any JUnit-aware tool. GitHub itself does not render JUnit |
+| `evidence/<scenario>/E###-*.png` | the screenshots the agent and harness cited |
+| `logs/<scenario>.log` | each scenario subprocess's output |
+
+Every non-passing criterion also becomes an **error annotation** on the run and on
+the PR's checks, and every finding becomes a warning (critical, major) or a notice
+(minor, cosmetic). These are GitHub's native workflow commands, so they need no extra
+action and work on GHES. GitHub shows at most 10 annotations of each level per step,
+which is why errors come first. The summary cites screenshots by their path in the
+artifact. Every screenshot and report is also kept, KMS-encrypted, in the evidence
+bucket under `runs/<run_id>/` for the audit trail.
+
 ## Watching an agent (VIEW_STOP)
 
 Run with `observe: true`. For each scenario the job log prints an `aws ssm get-parameter` command.

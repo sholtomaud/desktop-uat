@@ -172,3 +172,20 @@ def test_parallelism_never_exceeds_the_fleet_capacity(run):
     run()
 
     assert run.workers == [2, 1, 2]
+
+
+def test_under_github_actions_the_run_prints_annotations(run, capsys, monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    run(c="ERROR")
+
+    out = capsys.readouterr().out.splitlines()
+    assert "::error title=UAT c ERROR::scenario errored without a message; see logs/c.log" in out
+
+
+def test_outside_github_actions_no_workflow_commands_are_printed(run, capsys, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    run(b="FAIL")
+
+    assert "::" not in capsys.readouterr().out
