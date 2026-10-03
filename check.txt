@@ -1,0 +1,26 @@
+container system start
+Verifying machine API server is running...
+container run --rm -v /Users/sholtomaud/Development/desktop-uat:/repo -w /repo rhysd/actionlint:1.7.7 -no-color
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app desktop-uat shellcheck scripts/*.sh
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app desktop-uat bash -c 'cd infra && $0 "$@"' npx tsc --noEmit
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app desktop-uat bash -c 'cd infra && $0 "$@"' npx jest --runInBand
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app desktop-uat bash -c 'cd infra && $0 "$@"' npx cdk synth --quiet
+Successfully synthesized to /app/infra/cdk.out
+Supply a stack id (DesktopUat-prod-Network, DesktopUat-prod-Desktop, DesktopUat-prod-Runners) to display its template.
+82 feature flags are not configured. Run 'cdk flags --unstable=flags' to learn more.
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app desktop-uat bash -c 'cd harness && $0 "$@"' python -m uat_harness.cli validate --scenarios scenarios
+1 scenario(s) valid
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app desktop-uat python -m pytest -p no:cacheprovider
+........................................................................ [ 50%]
+.......................................................................  [100%]
+143 passed in 8.36s
+container run --rm --init -m 4g -c 4 -v /Users/sholtomaud/Development/desktop-uat:/app -w /app/image/flaui-mcp-server -e NUGET_PACKAGES=/app/.cache/nuget mcr.microsoft.com/dotnet/sdk:8.0 dotnet build -c Release -p:EnableWindowsTargeting=true
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  FlaUiMcpServer -> /app/image/flaui-mcp-server/bin/Release/net8.0-windows/win-x64/FlaUiMcpServer.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.62

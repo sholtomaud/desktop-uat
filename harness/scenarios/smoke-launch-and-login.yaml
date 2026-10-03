@@ -1,15 +1,19 @@
-# Example scenario - replace AutomationIds, paths and text with your app's.
+# The worked example. It targets the example app in example-app/ (UAT Demo), so it runs
+# as written. For your own app, copy it and replace the AutomationIds, paths and text.
+#
+# Its deterministic criteria are also run, for real, against UAT Demo by
+# tests/windows/test_flaui_live.py, so they are known to hold.
 id: smoke-login
 title: Launch, sign in with test account, dashboard renders
 tags: [smoke, release]
 timeout_seconds: 1200
-# Session users are not local admins: the MSI must support per-user install.
-installer_args: "ALLUSERS=2 MSIINSTALLPERUSER=1"
+# A .zip is extracted to <install root>\app. An MSI must support per-user install
+# (session users are not local admins): installer_args "ALLUSERS=2 MSIINSTALLPERUSER=1".
 setup:
   - tool: reset_app_state
-    arguments: { processName: "YourApp", relativePaths: ["YourCompany\\YourApp"] }
+    arguments: { processName: "UatDemo", relativePaths: ["UatDemo"] }
 launch:
-  executable: "%LOCALAPPDATA%\\Programs\\YourApp\\YourApp.exe"
+  executable: "%LOCALAPPDATA%\\UatInstall\\app\\UatDemo.exe"
   arguments: "--uat"
   main_window_timeout_seconds: 90
 instructions: |
@@ -19,7 +23,7 @@ instructions: |
 criteria:
   - id: C1
     kind: visual
-    description: Sign-in screen shows the company logo, username and password fields and an enabled Sign in button.
+    description: Sign-in screen shows the product logo, username and password fields and an enabled Sign in button.
   - id: C2
     kind: visual
     description: After sign-in the dashboard shows the user's display name and no error banners, with no clipped or overlapping text at 1280x720.
@@ -28,10 +32,10 @@ criteria:
     description: Export completes with a visible success confirmation.
   - id: C4
     kind: deterministic
-    description: Main window title contains the release version.
+    description: Main window title carries the release version.
     assertion:
       tool: assert_window_title
-      arguments: { expected: "1.", comparison: "contains" }
+      arguments: { expected: "^UAT Demo \\d+\\.\\d+\\.\\d+", comparison: "regex" }
   - id: C5
     kind: deterministic
     description: Status bar reports Connected.
@@ -40,8 +44,8 @@ criteria:
       arguments: { automationId: "StatusBarConnection", property: "name", expected: "Connected", comparison: "equals", timeoutSeconds: 15 }
   - id: C6
     kind: deterministic
-    description: Export button is enabled for a signed-in user.
+    description: The signed-in user's display name is shown.
     assertion:
       tool: assert_element
-      arguments: { automationId: "ExportButton", property: "isEnabled", expected: "true" }
+      arguments: { automationId: "DisplayName", property: "name", expected: "UAT Tester", comparison: "contains" }
 explore: true

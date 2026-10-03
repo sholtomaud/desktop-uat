@@ -13,14 +13,14 @@
 .EXAMPLE
   .\Install-UatImage.ps1 -ServerZip C:\staging\flaui-mcp-server.zip `
       -BuildsBucketHost "desktopuat-prod-desktop-buildsxxxx.s3.ap-southeast-2.amazonaws.com" `
-      -StateRootSuffix "YourCompany" -VcRedist C:\staging\vc_redist.x64.exe `
+      -StateRootSuffix "UatDemo" -VcRedist C:\staging\vc_redist.x64.exe `
       -ImageName "desktop-uat-base-2026-10-01" -CreateImage
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)] [string] $ServerZip,          # dotnet publish output of image/flaui-mcp-server, zipped
   [Parameter(Mandatory)] [string] $BuildsBucketHost,   # CDK output BuildsBucket + ".s3.<region>.amazonaws.com"
-  [string] $StateRootSuffix = "YourCompany",           # %APPDATA%\<this> is wiped by reset_app_state
+  [string] $StateRootSuffix = "UatDemo",               # %APPDATA%\<this> is wiped by reset_app_state (the example app's state dir)
   [string] $VcRedist,                                  # path to vc_redist.x64.exe (no internet on fleet)
   [string] $ImageName,
   [switch] $CreateImage
