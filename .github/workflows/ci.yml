@@ -1,0 +1,33 @@
+name: CI
+
+# The same `make check` as a laptop, with Docker standing in for Apple `container`.
+# Nothing here touches AWS: the CDK synthesizes offline, and the harness and the
+# scripts run against fakes (see AGENTS.md, "What is mocked").
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CONTAINER_BIN: docker
+      START: "true"
+      RESOURCES: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the dev image
+        run: make image
+
+      - name: make check
+        run: make check

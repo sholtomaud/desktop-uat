@@ -1,0 +1,47 @@
+# Example scenario - replace AutomationIds, paths and text with your app's.
+id: smoke-login
+title: Launch, sign in with test account, dashboard renders
+tags: [smoke, release]
+timeout_seconds: 1200
+# Session users are not local admins: the MSI must support per-user install.
+installer_args: "ALLUSERS=2 MSIINSTALLPERUSER=1"
+setup:
+  - tool: reset_app_state
+    arguments: { processName: "YourApp", relativePaths: ["YourCompany\\YourApp"] }
+launch:
+  executable: "%LOCALAPPDATA%\\Programs\\YourApp\\YourApp.exe"
+  arguments: "--uat"
+  main_window_timeout_seconds: 90
+instructions: |
+  Sign in using username "uat.tester" and password "Uat-Test-Only-1" (a non-production test account).
+  On the dashboard, open the Reports tab, then export the "Monthly summary" report as PDF to the
+  Documents folder. Then open Help > About.
+criteria:
+  - id: C1
+    kind: visual
+    description: Sign-in screen shows the company logo, username and password fields and an enabled Sign in button.
+  - id: C2
+    kind: visual
+    description: After sign-in the dashboard shows the user's display name and no error banners, with no clipped or overlapping text at 1280x720.
+  - id: C3
+    kind: visual
+    description: Export completes with a visible success confirmation.
+  - id: C4
+    kind: deterministic
+    description: Main window title contains the release version.
+    assertion:
+      tool: assert_window_title
+      arguments: { expected: "1.", comparison: "contains" }
+  - id: C5
+    kind: deterministic
+    description: Status bar reports Connected.
+    assertion:
+      tool: assert_element
+      arguments: { automationId: "StatusBarConnection", property: "name", expected: "Connected", comparison: "equals", timeoutSeconds: 15 }
+  - id: C6
+    kind: deterministic
+    description: Export button is enabled for a signed-in user.
+    assertion:
+      tool: assert_element
+      arguments: { automationId: "ExportButton", property: "isEnabled", expected: "true" }
+explore: true

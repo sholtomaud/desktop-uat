@@ -1,0 +1,26 @@
+node_modules/
+.DS_Store
+*.log
+
+# CDK
+infra/cdk.out/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Harness output: report.json, junit.xml, screenshots
+reports/
+
+# .NET build output, and the NuGet cache `make flaui-*` keeps in the checkout
+image/flaui-mcp-server/bin/
+image/flaui-mcp-server/obj/
+.cache/
+
+# `make flaui-zip` output
+dist/
+
+# Scratch space for sources that must not be committed. Inside the checkout so
+# it is to hand, ignored so it cannot be published by accident.
+temp/

@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""A fake `aws` CLI for the workflow's shell scripts.
+
+Implements exactly the calls scripts/*.sh make, against a JSON state file, so the
+scripts run unmodified with no AWS account. Every invocation is appended to a log
+so a test can assert what was (and was not) called.
+
+  FAKE_AWS_STATE  JSON: {"ssm": {name: value}, "secrets": {id: string},
+                         "fleet_states": [state, ...], "s3": {"bucket/key": {...}}}
+                  describe-fleets returns fleet_states[0] and drops it while more
+                  than one remains, so ["STOPPED", "STARTING", "RUNNING"] is a
+                  fleet that comes up on the third poll and then stays up.
+  FAKE_AWS_LOG    one JSON array of argv per line
+  FAKE_AWS_S3_DIR where `s3 cp` puts object bodies
+"""
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ["FAKE_AWS_STATE"])
+argv = sys.argv[1:]
+with open(os.environ["FAKE_AWS_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(argv) + "\n")
+
+state = json.loads(STATE.read_text())
+
+
+def opt(name: str) -> str:
+    i = argv.index(name)
+    return argv[i + 1]
+
+
+def fail(code: str, message: str) -> None:
+    print(f"An error occurred ({code}) when calling the operation: {message}", file=sys.stderr)
+    sys.exit(254)
+
+
+def save() -> None:
+    STATE.write_text(json.dumps(state))
+
+
+service, op = argv[0], argv[1]
+
+if (service, op) == ("ssm", "get-parameter"):
+    name = opt("--name")
+    if name not in state["ssm"]:
+        fail("ParameterNotFound", name)
+    print(state["ssm"][name])
+
+elif (service, op) == ("ssm", "put-parameter"):
+    state["ssm"][opt("--name")] = opt("--value")
+    save()
+
+elif (service, op) == ("secretsmanager", "get-secret-value"):
+    sid = opt("--secret-id")
+    if sid not in state["secrets"]:
+        fail("ResourceNotFoundException", sid)
+    print(state["secrets"][sid])
+
+elif (service, op) == ("s3", "cp"):
+    src, dst = argv[2], argv[3]
+    assert dst.startswith("s3://"), dst
+    bucket_key = dst[len("s3://"):]
+    body = Path(os.environ["FAKE_AWS_S3_DIR"]) / bucket_key
+    body.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, body)
+    state.setdefault("s3", {})[bucket_key] = {
+        "metadata": opt("--metadata") if "--metadata" in argv else None,
+    }
+    save()
+
+elif (service, op) == ("appstream", "describe-fleets"):
+    states = state["fleet_states"]
+    print(states[0])
+    if len(states) > 1:
+        states.pop(0)
+        save()
+
+elif (service, op) in (("appstream", "start-fleet"), ("appstream", "stop-fleet")):
+    pass  # the log is the record
+
+else:
+    fail("FakeNotImplemented", " ".join(argv))

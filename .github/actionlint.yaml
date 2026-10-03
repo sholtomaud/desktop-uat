@@ -1,0 +1,10 @@
+# Labels the self-hosted GHES runners register with (infra/cdk.json runner.labels).
+self-hosted-runner:
+  labels:
+    - desktop-uat
+
+paths:
+  .github/workflows/desktop-uat.yml:
+    ignore:
+      # Deliberate: GHES does not support upload-artifact@v4 (see README, "GHES configuration").
+      - 'the runner of "actions/upload-artifact@v3" action is too old'
