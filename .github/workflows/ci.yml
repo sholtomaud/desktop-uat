@@ -3,6 +3,9 @@ name: CI
 # The same `make check` as a laptop, with Docker standing in for Apple `container`.
 # Nothing here touches AWS: the CDK synthesizes offline, and the harness and the
 # scripts run against fakes (see AGENTS.md, "What is mocked").
+#
+# Then the one thing no container can do: the real FlaUI MCP server driving the real
+# example app on a Windows desktop, from the very zips the check job built.
 on:
   pull_request:
   push:
@@ -31,3 +34,76 @@ jobs:
 
       - name: make check
         run: make check
+
+      # example-build already ran inside `check`; add the server.
+      - name: Package the FlaUI server
+        run: make flaui-zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: FlaUI live (Windows)
+    needs: check
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-bundle
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Harness dependencies
+        run: python -m pip install --quiet -r harness/requirements-dev.txt
+
+      # install_build only downloads over HTTPS from an allow-listed host. The test
+      # serves the zip from localhost, so the machine has to trust a localhost cert.
+      - name: Localhost certificate
+        shell: bash
+        env:
+          MSYS_NO_PATHCONV: "1"   # keep Git Bash from rewriting /CN=... into a path
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$RUNNER_TEMP/key.pem" -out "$RUNNER_TEMP/cert.pem" \
+            -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
+
+      - name: Trust it
+        shell: pwsh
+        run: Import-Certificate -FilePath "$env:RUNNER_TEMP\cert.pem" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+
+      - name: FlaUI against UAT Demo
+        shell: bash
+        run: |
+          export FLAUI_SERVER_ZIP="$GITHUB_WORKSPACE/dist/flaui-mcp-server.zip"
+          version=$(tr -d '\r\n' < example-app/VERSION)
+          export UAT_DEMO_ZIP="$GITHUB_WORKSPACE/dist/uat-demo-$version.zip"
+          export UAT_TLS_CERT="$RUNNER_TEMP/cert.pem" UAT_TLS_KEY="$RUNNER_TEMP/key.pem"
+          python -m pytest tests/windows -v -p no:cacheprovider
+
+      # A failing UI test is far easier to read with a picture of the desktop.
+      - name: Screenshot on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+          $bmp.Save("$env:RUNNER_TEMP\desktop.png")
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-failure
+          path: ${{ runner.temp }}/desktop.png
+          if-no-files-found: ignore

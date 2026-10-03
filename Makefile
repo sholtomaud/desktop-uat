@@ -32,7 +32,7 @@ DOTNET        := $(CONTAINER_BIN) run --rm --init $(RESOURCES) \
 ACTIONLINT    := rhysd/actionlint:1.7.7
 
 .PHONY: help start image install typecheck test-infra synth harness-validate \
-        test-py lint flaui-build flaui-zip check clean
+        test-py lint flaui-build flaui-zip example-test example-build check clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -96,17 +96,31 @@ flaui-build: start ## Compile the FlaUI MCP server (Release, win-x64)
 	$(DOTNET) dotnet build -c Release -p:EnableWindowsTargeting=true
 
 flaui-zip: start ## Publish it self-contained to dist/flaui-mcp-server.zip, for Install-UatImage.ps1
-	rm -rf dist/flaui-mcp-server dist/flaui-mcp-server.zip
+	$(RUN) rm -rf dist/flaui-mcp-server dist/flaui-mcp-server.zip
 	$(DOTNET) dotnet publish -c Release -p:EnableWindowsTargeting=true -o $(WORKDIR)/dist/flaui-mcp-server
-	cd dist/flaui-mcp-server && zip -qr ../flaui-mcp-server.zip .
+	$(RUN) sh -c 'cd dist/flaui-mcp-server && zip -qr ../flaui-mcp-server.zip .'
 	@echo "dist/flaui-mcp-server.zip"
+
+# --------------------------------------------------
+# example-app/ — UAT Demo, the Win32 app the worked scenario tests
+#
+# Its logic is tested natively; the app is cross-compiled with MinGW-w64 into a
+# static .exe and zipped for install_build. The UI itself is only exercised on
+# Windows: tests/windows/, in CI's `windows` job.
+# --------------------------------------------------
+
+example-test: start ## Unit tests for the example app's logic (native g++)
+	$(RUN) make -C example-app test
+
+example-build: start ## Cross-compile UAT Demo to dist/uat-demo-<version>.zip
+	$(RUN) make -C example-app dist
 
 # --------------------------------------------------
 # Everything CI runs. Must pass before pushing.
 # --------------------------------------------------
 
-check: lint typecheck test-infra synth harness-validate test-py flaui-build ## Everything CI runs. Must pass before pushing
+check: lint typecheck test-infra synth harness-validate test-py flaui-build example-test example-build ## Everything CI runs. Must pass before pushing
 
 clean: ## Remove build output and dependencies
-	rm -rf infra/node_modules infra/cdk.out dist .cache \
+	rm -rf infra/node_modules infra/cdk.out dist .cache example-app/build \
 		$(FLAUI_DIR)/bin $(FLAUI_DIR)/obj

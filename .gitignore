@@ -18,8 +18,9 @@ image/flaui-mcp-server/bin/
 image/flaui-mcp-server/obj/
 .cache/
 
-# `make flaui-zip` output
+# `make flaui-zip` / `make example-build` output
 dist/
+example-app/build/
 
 # Scratch space for sources that must not be committed. Inside the checkout so
 # it is to hand, ignored so it cannot be published by accident.

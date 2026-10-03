@@ -13,9 +13,12 @@ ENV CI=true
 
 # curl, jq and sha256sum are what scripts/stage-from-artifactory.sh calls; the
 # runner has them, macOS lacks sha256sum, so the script is exercised in here.
+# g++ tests the example app's logic natively; MinGW-w64 cross-compiles the app
+# itself to a Windows .exe, and zip packages it for install_build.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3 python3-venv ca-certificates curl jq shellcheck && \
+        python3 python3-venv ca-certificates curl jq shellcheck \
+        make g++ g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 zip && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
