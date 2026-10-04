@@ -226,6 +226,29 @@ def test_the_reports_tab_exports_a_pdf_to_documents(session):
     assert pdf.read_bytes().startswith(b"%PDF-1.4")
 
 
+def test_a_dialog_the_app_owns_is_found_by_its_window_title(session):
+    """Owned dialogs sit under their owner in the UIA tree, not under the desktop,
+    and appear a moment after the click that opens them."""
+    session.call_ok("click_element", {"name": "Help", "controlType": "MenuItem"})
+    session.call_ok("click_element", {"name": "About UAT Demo", "controlType": "MenuItem"})
+
+    text = session.call_json("assert_element", {"windowTitle": "About UAT Demo", "controlType": "Text",
+                                                "property": "name", "expected": f"UAT Demo {VERSION}",
+                                                "comparison": "contains"})
+    assert text["pass"], text
+    session.call_ok("click_element", {"name": "OK", "windowTitle": "About UAT Demo"})
+
+    gone = session.call_json("assert_element", {"name": "About UAT Demo", "controlType": "Window",
+                                                "property": "exists", "expected": "false", "timeoutSeconds": 5})
+    assert gone["pass"], gone
+
+
+def test_a_window_that_never_appears_is_an_answer_not_a_crash(session):
+    r = session.call_json("click_element", {"name": "OK", "windowTitle": "No such window", "timeoutSeconds": 1})
+
+    assert r["ok"] is False and "not found" in r["message"]
+
+
 def test_the_ui_tree_exposes_the_automation_ids(session):
     import json
     tree = json.dumps(session.call_json("dump_ui_tree", {"maxDepth": 3}))

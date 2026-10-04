@@ -29,12 +29,18 @@ public static class UiTools
         if (parts.Count == 0) throw new ArgumentException("provide automationId, name and/or controlType");
         var cond = parts.Count == 1 ? parts[0] : new AndCondition(parts.ToArray());
 
-        AutomationElement Root() => string.IsNullOrEmpty(windowTitle)
-            ? host.MainWindow(TimeSpan.FromSeconds(5))
-            : host.Automation.GetDesktop().FindFirstChild(cf.ByName(windowTitle))
-              ?? throw new InvalidOperationException($"window '{windowTitle}' not found");
+        // A titled window is either top-level (a child of the desktop) or a dialog the app
+        // owns, which UIA places under its owner window instead. It may also not exist yet:
+        // null keeps the retry polling until it appears or the timeout passes.
+        AutomationElement? Root()
+        {
+            if (string.IsNullOrEmpty(windowTitle)) return host.MainWindow(TimeSpan.FromSeconds(5));
+            var byTitle = cf.ByName(windowTitle).And(cf.ByControlType(ControlType.Window));
+            return host.Automation.GetDesktop().FindFirstChild(byTitle)
+                ?? (host.App is null ? null : host.MainWindow(TimeSpan.FromSeconds(1)).FindFirstDescendant(byTitle));
+        }
 
-        return Retry.WhileNull(() => Root().FindFirstDescendant(cond),
+        return Retry.WhileNull(() => Root()?.FindFirstDescendant(cond),
             TimeSpan.FromSeconds(timeoutSeconds), TimeSpan.FromMilliseconds(250), throwOnTimeout: false).Result;
     }
 

@@ -27,7 +27,7 @@ SHA = "a" * 64
 # namespaced. The harness resolves both by suffix, so the fake does the same.
 COMPUTER_USE = ["screenshot", "left_click", "type_text", "key"]
 FLAUI = ["install_build", "reset_app_state", "launch_app", "assert_element", "assert_window_title",
-         "dump_ui_tree"]
+         "dump_ui_tree", "set_text", "click_element", "get_element", "read_log_tail"]
 
 
 class Page(list):
@@ -48,7 +48,7 @@ class FakeDesktop:
             "screenshot": lambda a: {"status": "success",
                                      "content": [{"image": {"format": "png", "source": {"bytes": PNG}}}]},
         }
-        for n in ("install_build", "reset_app_state", "launch_app"):
+        for n in ("install_build", "reset_app_state", "launch_app", "set_text", "click_element"):
             self.on(n, {"ok": True})
         self.on("assert_element", {"pass": True, "message": "ok", "actual": "Connected"})
         self.on("assert_window_title", {"pass": True, "message": "ok", "actual": "YourApp 1.4.0"})
@@ -63,6 +63,14 @@ class FakeDesktop:
         self.handlers[suffix] = lambda a: {"status": "error", "content": [{"text": text}]}
 
     # --- the MCPClient surface DesktopSession uses
+    exited = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.exited = True
+
     def list_tools_sync(self, pagination_token=None):
         start = int(pagination_token or 0)
         end = start + self.page_size

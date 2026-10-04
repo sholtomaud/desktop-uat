@@ -49,3 +49,25 @@ criteria:
       tool: assert_element
       arguments: { automationId: "DisplayName", property: "name", expected: "UAT Tester", comparison: "contains" }
 explore: true
+# The same journey as `instructions`, as exact steps. The agent ignores this; it is
+# what drives the app when there is no agent (`uat_harness local`, CI's windows
+# job), so the screenshots exist for a person to judge C1-C3 against.
+walkthrough:
+  - { tool: set_text, arguments: { automationId: UsernameBox, text: uat.tester } }
+  - tool: set_text
+    arguments: { automationId: PasswordBox, text: Uat-Test-Only-1 }
+    capture: sign-in form filled in
+  - tool: click_element
+    arguments: { automationId: SignInButton }
+    capture: dashboard after sign-in
+  - tool: click_element
+    arguments: { name: Reports, controlType: TabItem }
+    capture: reports tab
+  - tool: click_element
+    arguments: { automationId: ExportButton }
+    capture: export confirmation
+  - { tool: click_element, arguments: { name: Help, controlType: MenuItem } }
+  - tool: click_element
+    arguments: { name: About UAT Demo, controlType: MenuItem }
+    capture: about dialog
+  - { tool: click_element, arguments: { name: OK, windowTitle: About UAT Demo } }

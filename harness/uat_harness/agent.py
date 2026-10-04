@@ -14,13 +14,13 @@ from strands.models.bedrock import BedrockModel
 
 from .config import HarnessConfig
 from .evidence import EvidenceRecorder
-from .models import AgentVerdict, Scenario
+from .models import HARNESS_ONLY_TOOLS, AgentVerdict, Scenario
 from .session import DesktopSession
 
 log = logging.getLogger(__name__)
 
 # Harness-only tools the LLM must never call.
-AGENT_DENYLIST = ("install_build", "reset_app_state", "launch_app")
+AGENT_DENYLIST = HARNESS_ONLY_TOOLS
 
 VERDICT_SCHEMA_HINT = json.dumps({
     "summary": "2-5 sentences on what you tested and the overall impression",

@@ -37,6 +37,11 @@ enum : int {
   IDM_EXIT = 200, IDM_ABOUT,
 };
 
+// Help > About is shown after the menu command returns, not inside it. A UI
+// Automation client that invokes the menu item would otherwise wait on the
+// modal dialog until someone closed it.
+constexpr UINT WM_APP_SHOW_ABOUT = WM_APP + 1;
+
 struct App {
   HWND wnd{};
   HFONT font{}, big_font{};
@@ -240,17 +245,20 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EnableWindow(g.export_button, SendMessageW(g.report_list, LB_GETCURSEL, 0, 0) >= 0);
           }
           return 0;
-        case IDM_ABOUT: {
-          const auto text = widen(std::string("UAT Demo ") + UATDEMO_VERSION) +
-                            L"\nAn example application for desktop-uat.";
-          MessageBoxW(hwnd, text.c_str(), L"About UAT Demo", MB_OK | MB_ICONINFORMATION);
+        case IDM_ABOUT:
+          PostMessageW(hwnd, WM_APP_SHOW_ABOUT, 0, 0);
           return 0;
-        }
         case IDM_EXIT:
           DestroyWindow(hwnd);
           return 0;
       }
       break;
+    case WM_APP_SHOW_ABOUT: {
+      const auto text = widen(std::string("UAT Demo ") + UATDEMO_VERSION) +
+                        L"\nAn example application for desktop-uat.";
+      MessageBoxW(hwnd, text.c_str(), L"About UAT Demo", MB_OK | MB_ICONINFORMATION);
+      return 0;
+    }
     case WM_NOTIFY:
       if (reinterpret_cast<NMHDR*>(lp)->code == TCN_SELCHANGE) {
         show_tab(static_cast<int>(SendMessageW(g.tabs, TCM_GETCURSEL, 0, 0)));

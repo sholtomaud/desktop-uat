@@ -135,6 +135,7 @@ Each run writes `reports/`. The workflow uploads it as the job artifact
 | File | For |
 |---|---|
 | `summary.md` | the run's job summary page: results table, failed criteria, findings |
+| `report.html` | one self-contained page with **every screenshot embedded**. Unzip the artifact and open it, even offline |
 | `report.json` | machine-readable, validated by `harness/report.schema.json` |
 | `junit.xml` | any JUnit-aware tool. GitHub itself does not render JUnit |
 | `evidence/<scenario>/E###-*.png` | the screenshots the agent and harness cited |
@@ -147,6 +148,32 @@ action and work on GHES. GitHub shows at most 10 annotations of each level per s
 which is why errors come first. The summary cites screenshots by their path in the
 artifact. Every screenshot and report is also kept, KMS-encrypted, in the evidence
 bucket under `runs/<run_id>/` for the audit trail.
+
+## Running without AWS: walkthrough mode
+
+`uat_harness local` runs scenarios on a Windows machine, with no AWS and no agent:
+- the FlaUI MCP server runs as a child process over stdio;
+- the build is served to `install_build` over HTTPS from localhost;
+- the scenario's `walkthrough:` steps drive the app;
+- the harness takes its own screenshots.
+
+Setup, launch, deterministic assertions, evidence and all four report files run the
+same code as an agent run. Visual criteria can't be judged without the model, so
+they're reported **awaiting review** and cite the screenshots for a person to judge.
+They don't fail the run.
+
+CI's `windows` job does this on every PR for the worked scenario against UAT Demo. The
+run's summary page shows the results and links straight to the report artifact.
+(A job summary can't inline the screenshots: GitHub strips `data:` images, and
+artifact URLs need a login.)
+
+```yaml
+walkthrough:              # in a scenario; ignored by agent runs
+  - { tool: set_text, arguments: { automationId: UsernameBox, text: uat.tester } }
+  - tool: click_element
+    arguments: { automationId: SignInButton }
+    capture: dashboard after sign-in    # a labelled screenshot after this step
+```
 
 ## Watching an agent (VIEW_STOP)
 

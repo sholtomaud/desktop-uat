@@ -32,7 +32,7 @@ def test_the_regex_finds_the_annotations():
 
 
 def test_every_automation_id_the_scenario_uses_is_one_the_app_sets():
-    used = automation_ids_in(SCENARIO["criteria"])
+    used = automation_ids_in(SCENARIO["criteria"]) | automation_ids_in(SCENARIO.get("walkthrough", []))
 
     assert used and used <= ANNOTATED, used - ANNOTATED
 
@@ -64,3 +64,16 @@ def test_the_scenario_signs_in_with_the_account_the_app_accepts():
 
     assert m, "the instructions name the test account"
     assert f'== "{m[1]}" && password == "{m[2]}"' in core
+
+
+def test_the_walkthrough_signs_in_with_the_account_the_instructions_name():
+    m = re.search(r'username "([^"]+)" and password "([^"]+)"', SCENARIO["instructions"])
+    typed = {s["arguments"]["automationId"]: s["arguments"]["text"]
+             for s in SCENARIO["walkthrough"] if s["tool"] == "set_text"}
+
+    assert typed == {"UsernameBox": m[1], "PasswordBox": m[2]}
+
+
+def test_the_walkthrough_menu_names_are_the_apps():
+    for name in ("&Help", "&About UAT Demo", "About UAT Demo"):
+        assert f'L"{name}"' in MAIN_CPP, name

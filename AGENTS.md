@@ -98,6 +98,17 @@ boundary, and the code under test is the real code:
 | `boto3` clients | `FakeBoto` (S3, AppStream, SSM) | same |
 | the Bedrock agent loop | a scripted agent that calls the real `capture_evidence` / `submit_verdict` tools | [`harness/tests/test_agent.py`](harness/tests/test_agent.py) |
 | the Lambda AWS SDK | fake clients injected through `require` | [`infra/test/janitor.test.ts`](infra/test/janitor.test.ts) |
+| the Windows desktop's screen (local mode) | a fixed PNG in place of the PowerShell capture | [`harness/tests/test_cli.py`](harness/tests/test_cli.py) |
+
+**There are two ways a scenario runs, and they share one code path** (`runner.execute`):
+an *agent* run on AWS (`AwsBackend`), and a *walkthrough* run on any Windows machine
+(`LocalBackend`, `uat_harness local`). In a walkthrough run the scenario's `walkthrough:`
+steps drive the app instead of the agent. A change to setup, assertions, evidence or
+reporting therefore reaches both runs. A change that only one of them needs goes in its
+backend.
+
+CI's `windows` job runs both of the real things the containers can't: the live FlaUI
+tests, and the worked scenario in walkthrough mode, with its report published.
 
 Not tested locally, and only proven by a real run on AWS: whether the model's
 judgement is any good, what the agent-access service actually does, the

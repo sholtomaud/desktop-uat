@@ -3,8 +3,16 @@
     "BuildRef": {
       "properties": {
         "s3_uri": {
-          "title": "S3 Uri",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "S3 Uri"
         },
         "sha256": {
           "pattern": "^[a-f0-9]{64}$",
@@ -26,10 +34,21 @@
           ],
           "default": null,
           "title": "Artifactory Uri"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
         }
       },
       "required": [
-        "s3_uri",
         "sha256",
         "name"
       ],
@@ -119,8 +138,16 @@
           "type": "string"
         },
         "s3_uri": {
-          "title": "S3 Uri",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "S3 Uri"
         },
         "local_path": {
           "title": "Local Path",
@@ -134,7 +161,6 @@
       "required": [
         "id",
         "label",
-        "s3_uri",
         "local_path",
         "captured_at"
       ],
@@ -288,6 +314,15 @@
     },
     "model_id": {
       "title": "Model Id",
+      "type": "string"
+    },
+    "mode": {
+      "default": "agent",
+      "enum": [
+        "agent",
+        "walkthrough"
+      ],
+      "title": "Mode",
       "type": "string"
     },
     "started_at": {
