@@ -17,6 +17,13 @@ RUN           := $(CONTAINER_BIN) run --rm --init $(RESOURCES) \
 	-v $(shell pwd):$(WORKDIR) $(IMAGE_APP)
 INFRA         := $(RUN) bash -c 'cd infra && $$0 "$$@"'
 HARNESS       := $(RUN) bash -c 'cd harness && $$0 "$$@"'
+# Providers are cached in the checkout (ignored), so validate does not
+# re-download them each time.
+CDKTN         := $(CONTAINER_BIN) run --rm --init $(RESOURCES) \
+	-v $(shell pwd):$(WORKDIR) -e TF_PLUGIN_CACHE_DIR=$(WORKDIR)/.cache/tofu-plugins \
+	$(IMAGE_APP) bash -c 'mkdir -p /app/.cache/tofu-plugins && cd cdktn && $$0 "$$@"'
+# Every platform that may run `init` against the committed lock files.
+TOFU_PLATFORMS := linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64
 
 # The FlaUI MCP server targets net8.0-windows. It builds anywhere with
 # EnableWindowsTargeting; it only *runs* on the WorkSpaces Windows image.
@@ -32,7 +39,9 @@ DOTNET        := $(CONTAINER_BIN) run --rm --init $(RESOURCES) \
 ACTIONLINT    := rhysd/actionlint:1.7.7
 
 .PHONY: help start image install typecheck test-infra synth harness-validate \
-        test-py lint flaui-build flaui-zip example-test example-build check clean
+        test-py lint flaui-build flaui-zip example-test example-build check clean \
+        cdktn-install cdktn-typecheck cdktn-test cdktn-snapshots cdktn-synth cdktn-check \
+        tofu-lock tofu-validate
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -73,6 +82,43 @@ synth: start infra/node_modules ## cdk synth all stacks into infra/cdk.out/
 	$(INFRA) npx cdk synth --quiet
 
 # --------------------------------------------------
+# cdktn/ — the same deployment as committed Terraform (HCL)
+#
+# cdktn/terraform/<stack>/main.tf is generated: change cdktn/lib/, then
+# `make cdktn-synth` and commit both. `make check` fails if they disagree.
+# --------------------------------------------------
+
+cdktn/node_modules: cdktn/package-lock.json
+	$(CDKTN) sh -c 'npm ci --no-audit --no-fund && touch node_modules'
+
+cdktn-install: start cdktn/node_modules ## npm ci for cdktn/, inside the container
+
+cdktn-typecheck: start cdktn/node_modules ## tsc --noEmit on the cdktn app
+	$(CDKTN) npx tsc --noEmit
+
+cdktn-test: start cdktn/node_modules ## Jest: the constructs, the contracts, the janitor, the HCL snapshot
+	$(CDKTN) npx jest --runInBand
+
+# CI=true is set in the image, and jest never writes snapshots in CI mode.
+cdktn-snapshots: start cdktn/node_modules ## Rewrite the HCL snapshot after an intended change
+	$(CDKTN) npx jest --runInBand --ci=false -u
+
+cdktn-synth: start cdktn/node_modules ## Synthesize and format cdktn/terraform/<stack>/main.tf
+	$(CDKTN) ./synth.sh
+
+cdktn-check: start cdktn/node_modules ## Fail if cdktn/terraform/ is not what cdktn/ synthesizes
+	$(CDKTN) ./synth.sh --check
+
+# Downloads providers: run after a provider version changes, and commit the result.
+tofu-lock: start ## Re-lock providers in cdktn/terraform/ for every platform
+	$(CDKTN) sh -c 'for d in terraform/*/; do (cd "$$d" && tofu providers lock $(TOFU_PLATFORMS:%=-platform=%)) || exit 1; done'
+
+# Downloads providers (cached in .cache/tofu-plugins) and checks the HCL
+# against their schemas. The committed lock files must already cover them.
+tofu-validate: start ## tofu validate every stack in cdktn/terraform/, against the committed locks
+	$(CDKTN) sh -c 'for d in terraform/*/; do echo "$$d"; (cd "$$d" && tofu init -backend=false -input=false -lockfile=readonly >/dev/null && tofu validate) || exit 1; done'
+
+# --------------------------------------------------
 # harness/ — the Python UAT harness
 # --------------------------------------------------
 
@@ -86,7 +132,7 @@ test-py: start ## pytest: the harness and the workflow's shell scripts, all mock
 
 lint: start ## actionlint (+ shellcheck of run: blocks) and shellcheck of scripts/
 	$(CONTAINER_BIN) run --rm -v $(shell pwd):/repo -w /repo $(ACTIONLINT) -no-color
-	$(RUN) shellcheck scripts/*.sh
+	$(RUN) shellcheck scripts/*.sh cdktn/synth.sh
 
 # --------------------------------------------------
 # image/flaui-mcp-server — built here, run on Windows
@@ -119,8 +165,10 @@ example-build: start ## Cross-compile UAT Demo to dist/uat-demo-<version>.zip
 # Everything CI runs. Must pass before pushing.
 # --------------------------------------------------
 
-check: lint typecheck test-infra synth harness-validate test-py flaui-build example-test example-build ## Everything CI runs. Must pass before pushing
+check: lint typecheck test-infra synth cdktn-typecheck cdktn-test cdktn-check tofu-validate \
+       harness-validate test-py flaui-build example-test example-build ## Everything CI runs. Must pass before pushing
 
 clean: ## Remove build output and dependencies
-	rm -rf infra/node_modules infra/cdk.out dist .cache example-app/build \
+	rm -rf infra/node_modules infra/cdk.out cdktn/node_modules cdktn/terraform/*/.terraform \
+		cdktn/terraform/*/.build dist .cache example-app/build \
 		$(FLAUI_DIR)/bin $(FLAUI_DIR)/obj

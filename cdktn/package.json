@@ -1,0 +1,36 @@
+{
+  "name": "desktop-uat-cdktn",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "synth": "ts-node bin/main.ts",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.6.0"
+  },
+  "dependencies": {
+    "@cdktn/provider-archive": "14.0.1",
+    "@cdktn/provider-aws": "25.7.0",
+    "@cdktn/provider-awscc": "1.7.0",
+    "cdktn": "0.24.0",
+    "constructs": "10.6.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/test"
+    ],
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
+    "setupFilesAfterEnv": [
+      "<rootDir>/test/setup.ts"
+    ]
+  }
+}

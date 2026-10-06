@@ -15,9 +15,15 @@ The repository has four parts, which never run in the same place:
 | Part | Language | Where it runs |
 |---|---|---|
 | [`infra/`](infra/) | TypeScript, CDK | `cdk deploy`, from a laptop or a pipeline |
+| [`cdktn/`](cdktn/) | TypeScript, cdktn → committed HCL | `terraform`/`tofu apply` of [`cdktn/terraform/`](cdktn/terraform/) (not yet applied) |
 | [`harness/`](harness/) | Python 3.11 | the GHES runner (Amazon Linux 2023), driven by the workflow |
 | [`scripts/`](scripts/) + [`.github/workflows/desktop-uat.yml`](.github/workflows/desktop-uat.yml) | bash | the GHES runner |
 | [`image/flaui-mcp-server/`](image/flaui-mcp-server/) | C#, .NET 8 | **inside the Windows desktop**, baked into the WorkSpaces image |
+
+`cdktn/` is the same deployment as `infra/`, for teams that run Terraform: the same
+settings (it reads `infra/cdk.json`), the same resources, held to the same contracts.
+It is not a fifth part so much as a second description of the first, and the HCL it
+generates is committed so Terraform users can review and apply it without Node.
 
 They meet only at a few contracts (§6). Most cross-part bugs are a break in one of
 those contracts.
@@ -28,6 +34,10 @@ those contracts.
 
 - **CDK:** `aws-cdk-lib` and `constructs`. Lambda code stays inline and uses only
   the AWS SDK that the runtime already provides. No bundling, so synth needs no Docker.
+- **cdktn:** `cdktn`, `constructs`, and the prebuilt `@cdktn/provider-aws`,
+  `-awscc` and `-archive`, all pinned exactly (cdktn is pre-1.0). awscc is there for
+  one resource: only it has the AppStream stack's `agent_access_config`. archive
+  packs the janitor's inline code. No `cdktn-cli`: the library writes HCL itself.
 - **Harness:** `strands-agents`, `mcp-proxy-for-aws`, `boto3`, `pydantic`, `PyYAML`.
   Everything else comes from the standard library.
 - **FlaUI server:** `FlaUI.UIA3`, `ModelContextProtocol`, `Microsoft.Extensions.Hosting`.
@@ -55,7 +65,7 @@ or GNU coreutils. Everything goes through the [`Makefile`](Makefile) and the App
 
 | Image | Used for |
 |---|---|
-| `desktop-uat` ([`Containerfile`](Containerfile)): Node `.node-version` on Debian bookworm, Python 3.11, harness deps, `curl`/`jq`/`shellcheck` | CDK, harness, scripts |
+| `desktop-uat` ([`Containerfile`](Containerfile)): Node `.node-version` on Debian bookworm, Python 3.11, harness deps, `curl`/`jq`/`shellcheck`, OpenTofu (pinned, checksum-verified) | CDK, cdktn and `tofu`, harness, scripts |
 | `mcr.microsoft.com/dotnet/sdk:8.0` | building the FlaUI server, which targets `net8.0-windows` via `EnableWindowsTargeting` |
 | `rhysd/actionlint` | the workflows |
 
@@ -78,6 +88,10 @@ make check
 - `typecheck`: `tsc --noEmit` on the CDK
 - `test-infra`: jest on the stacks, the contracts (§6) and the janitor
 - `synth`: `cdk synth` of all three stacks, offline
+- `cdktn-typecheck`, `cdktn-test`: `tsc` and jest on `cdktn/`, including an HCL snapshot
+- `cdktn-check`: the committed `cdktn/terraform/` is exactly what `cdktn/` synthesizes
+- `tofu-validate`: `tofu validate` of that HCL against the real provider schemas,
+  using the committed lock files (this one downloads providers)
 - `harness-validate`: every scenario in `harness/scenarios/`
 - `test-py`: pytest on the harness and the scripts
 - `flaui-build`: compiles the Windows MCP server
@@ -139,7 +153,9 @@ these contracts:
   harness and `FakeDesktop`.
 
 [`infra/test/contracts.test.ts`](infra/test/contracts.test.ts) reads the consumers'
-source and checks the first four against the synthesized templates. Change both
+source and checks the first four against the synthesized templates, and
+[`cdktn/test/contracts.test.ts`](cdktn/test/contracts.test.ts) checks them against
+the synthesized Terraform. Change both
 sides of a contract in the same PR. If a contract test breaks, read it as a missing
 change on the other side, not as a test to loosen.
 
@@ -154,6 +170,15 @@ change on the other side, not as a test to loosen.
 - **The CDK:** synth must stay offline. A new context lookup (`fromLookup`, AZs for a
   new account or region) needs its answer committed in
   [`infra/cdk.context.json`](infra/cdk.context.json).
+- **cdktn:** change `cdktn/lib/`, then `make cdktn-synth` and commit the regenerated
+  `cdktn/terraform/`. Never edit the HCL by hand: `make cdktn-check` rejects it. A
+  change to what is deployed is a change to both `infra/` and `cdktn/`, in one PR,
+  each with its tests. After an intended change, `make cdktn-snapshots` rewrites the
+  snapshot; read its diff, it is the HCL diff. After a provider version changes,
+  `make tofu-lock` too. cdktn 0.24's HCL renderer has three known faults, worked
+  around in [`cdktn/lib/hcl.ts`](cdktn/lib/hcl.ts) and tested: awscc attributes
+  written as blocks, quoted `depends_on`/`ignore_changes`, and multi-line locals. A
+  multi-line string must be one `heredocSafe` accepts.
 - **The harness:** tools the LLM must never call go in `AGENT_DENYLIST`. A visual
   criterion counts only if the agent cites evidence. Do not relax that to make a
   scenario pass.

@@ -5,6 +5,14 @@ node_modules/
 # CDK
 infra/cdk.out/
 
+# cdktn: synth scratch, and what tofu init/plan leave beside the committed HCL.
+# The lock files (.terraform.lock.hcl) are committed.
+cdktn/cdktf.out/
+cdktn/terraform/**/.terraform/
+cdktn/terraform/**/.build/
+*.tfstate
+*.tfstate.*
+
 # Python
 .venv/
 __pycache__/
