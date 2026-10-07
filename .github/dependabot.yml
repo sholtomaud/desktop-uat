@@ -18,7 +18,7 @@ updates:
       test-tooling:
         patterns: ["jest", "ts-jest", "@types/*", "ts-node", "typescript"]
 
-  # A provider bump changes the provider version in cdktn/terraform/*/main.tf, so
+  # A provider bump changes the provider version in cdktn/terraform/*/versions.tf, so
   # its PR fails `make cdktn-check` until someone runs `make cdktn-synth tofu-lock`
   # and commits: on purpose, since that is the change Terraform users will apply.
   # (No `terraform` ecosystem: the HCL is generated, and is bumped from here.)
@@ -29,13 +29,13 @@ updates:
     groups:
       cdktn:
         patterns: ["cdktn", "@cdktn/*", "constructs"]
+      test-tooling:
+        patterns: ["jest", "ts-jest", "@types/*", "ts-node", "typescript"]
     ignore:
       # cdktn 0.24 requires constructs >=10.6.0 <10.8.0. Drop this when a cdktn
       # release widens it; the cdktn group then brings constructs along.
       - dependency-name: constructs
         versions: [">=10.8.0"]
-      test-tooling:
-        patterns: ["jest", "ts-jest", "@types/*", "ts-node", "typescript"]
 
   - package-ecosystem: pip
     directory: /harness
