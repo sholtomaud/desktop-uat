@@ -64,6 +64,11 @@ variable "ami_parameter" {
   type        = string
 }
 
+variable "artifactory_token_secret_name" {
+  description = "Secrets Manager secret (created out of band) with JSON {\"token\"}: a read-only Artifactory token the operator stages builds with"
+  type        = string
+}
+
 variable "instance_type" {
   default     = "m7i.large"
   description = "Instance type for the desktops"

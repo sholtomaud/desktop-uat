@@ -1,0 +1,147 @@
+name: Desktop UAT (EC2, scripted)
+
+# The minimal path (cdktn/): an ephemeral Windows instance runs the scenarios'
+# walkthroughs, and is then torn down, or held for testers to RDP into with their
+# AD accounts until its expiry. No agent: visual criteria await a person's review.
+#
+# A release from Artifactory runs here when the repository variable UAT_PATH is
+# "ec2", and on the agentic path (desktop-uat.yml) otherwise. A manual run always
+# runs here.
+#
+# Repository variables:
+#   UAT_EC2_PARAMETER       the discovery parameter (cdktn output discovery_parameter)
+#   UAT_EC2_REGION          its region
+#   UAT_EC2_RUNS_ON         JSON runner labels, default ["self-hosted","linux"]; the runner's
+#                           role needs the operator policy (cdktn output operator_policy_arn)
+#   UAT_STATE_ROOT          what reset_app_state may delete, e.g. %APPDATA%/UatDemo
+#   ARTIFACTORY_URL, ARTIFACTORY_SECRET_ID    as for desktop-uat.yml
+#   UAT_ARTIFACTORY_REPO, UAT_ARTIFACT_PATH_TEMPLATE    as for desktop-uat.yml
+on:
+  repository_dispatch:
+    types: [artifactory-release]
+  workflow_dispatch:
+    inputs:
+      artifactory_repo:
+        description: Artifactory repository key
+        required: true
+        default: desktop-releases
+      artifactory_path:
+        description: Path inside the repo, e.g. app/1.4.0/App-1.4.0.zip
+        required: true
+      scenario_tags:
+        description: Comma-separated scenario tags (empty = all)
+        required: false
+        default: ""
+      hold_minutes:
+        description: Keep the desktop up this long after the run, for testers (0 = tear down)
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  uat:
+    name: Scripted UAT on EC2
+    if: github.event_name == 'workflow_dispatch' || vars.UAT_PATH == 'ec2'
+    runs-on: ${{ fromJSON(vars.UAT_EC2_RUNS_ON || '["self-hosted","linux"]') }}
+    timeout-minutes: 240
+    outputs:
+      verdict: ${{ steps.run.outputs.verdict }}
+    env:
+      AWS_REGION: ${{ vars.UAT_EC2_REGION }}
+      UAT_EC2_PARAMETER: ${{ vars.UAT_EC2_PARAMETER }}
+      ARTIFACTORY_URL: ${{ vars.ARTIFACTORY_URL }}
+      ARTIFACTORY_SECRET_ID: ${{ vars.ARTIFACTORY_SECRET_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # All event data goes through env vars, never ${{ }} inside the script.
+      - name: Resolve release artifact
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_REPO: ${{ github.event.client_payload.repo }}
+          DISPATCH_PATH: ${{ github.event.client_payload.path }}
+          INPUT_REPO: ${{ inputs.artifactory_repo }}
+          INPUT_PATH: ${{ inputs.artifactory_path }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_REPO: ${{ vars.UAT_ARTIFACTORY_REPO }}
+          PATH_TEMPLATE: ${{ vars.UAT_ARTIFACT_PATH_TEMPLATE }}
+        run: scripts/resolve-artifact.sh
+
+      - name: Find the EC2 setup
+        id: discover
+        shell: bash
+        run: scripts/ec2-uat.sh discover
+
+      - name: Stage from Artifactory (verify sha256)
+        id: stage
+        shell: bash
+        env:
+          ART_REPO: ${{ steps.resolve.outputs.repo }}
+          ART_PATH: ${{ steps.resolve.outputs.path }}
+          STAGE_BUCKET: ${{ steps.discover.outputs.bucket }}
+          STAGE_PREFIX: ${{ steps.discover.outputs.staging_prefix }}
+        run: scripts/stage-from-artifactory.sh "$ART_REPO" "$ART_PATH"
+
+      - name: Run UAT on an EC2 desktop
+        id: run
+        shell: bash
+        env:
+          TAGS: ${{ inputs.scenario_tags }}
+          HOLD: ${{ inputs.hold_minutes }}
+          STATE_ROOT: ${{ vars.UAT_STATE_ROOT }}
+          BUILD_S3_URI: ${{ steps.stage.outputs.build_s3_uri }}
+          BUILD_SHA256: ${{ steps.stage.outputs.build_sha256 }}
+        run: |
+          scripts/ec2-uat.sh run \
+            --build-s3-uri "$BUILD_S3_URI" --build-sha256 "$BUILD_SHA256" \
+            --scenarios harness/scenarios --state-root "$STATE_ROOT" --tags "${TAGS:-}" \
+            --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --git-ref "$GITHUB_REF" --git-sha "$GITHUB_SHA" \
+            --hold-minutes "${HOLD:-0}" --out reports
+
+      # The script tears down on its way out; a cancelled job may not get that far.
+      # (The instance's expiry terminates it regardless.)
+      - name: Tear down after a cancel
+        if: cancelled() && steps.run.outputs.instance_id != ''
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ steps.run.outputs.instance_id }}
+        run: scripts/ec2-uat.sh teardown "$INSTANCE_ID"
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f reports/summary.md ]; then cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else echo "No UAT report produced - see logs." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      # GHES does not support actions/upload-artifact@v4; use v3 there.
+      - name: Upload report and evidence
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: desktop-uat-ec2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          retention-days: 30
+
+  signoff:
+    name: Human UAT sign-off
+    needs: uat
+    if: needs.uat.result == 'success'
+    runs-on: ${{ fromJSON(vars.UAT_EC2_RUNS_ON || '["self-hosted","linux"]') }}
+    # Required reviewers on this environment make the approval the release sign-off,
+    # after they have judged the visual criteria from the screenshots, or on the
+    # held desktop itself.
+    environment: uat-signoff
+    steps:
+      - name: Record sign-off
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "UAT signed off for run $RUN_URL" | tee -a "$GITHUB_STEP_SUMMARY"

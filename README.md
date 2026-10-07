@@ -33,6 +33,7 @@ Artifactory --webhook--> GHES workflow --> ephemeral runner (private subnet, NAT
 | `image/flaui-mcp-server/` | .NET 8 MCP server (FlaUI UIA3), forwarded into the session |
 | `image/Install-UatImage.ps1` | Prepares the image builder and creates the image |
 | `.github/workflows/desktop-uat.yml` | GHES workflow |
+| `.github/workflows/desktop-uat-ec2.yml`, `scripts/ec2-uat.sh` | The EC2 path: launch, run the walkthroughs, hold for testers or tear down (`UAT_PATH=ec2` sends releases there) |
 | `scripts/resolve-artifact.sh` | Turns the triggering event into a validated Artifactory repo and path |
 | `tests/`, `harness/tests/`, `infra/test/`, `cdktn/test/`, `image/ec2/tests/` | The tests, all offline (see [AGENTS.md §5](AGENTS.md#5-what-is-mocked-and-what-is-not-tested-at-all)) |
 | `Makefile`, `Containerfile` | Every build and check, in containers: `make help` |

@@ -16,8 +16,8 @@ two disagree.
 ## How a run works
 
 ```
- GHES job or a laptop: scripts/ec2-uat.sh            (next PR)
-  1. stage     build + scenarios ──► s3://<bucket>/staging/<run>/
+ GHES (.github/workflows/desktop-uat-ec2.yml) or a laptop: scripts/ec2-uat.sh
+  1. stage     build (stage-from-artifactory.sh) + scenarios ──► s3://<bucket>/staging/
   2. launch    from the launch template; tags the instance desktop-uat-expires-at
   3. boot      Uat-Boot.ps1: join the domain, autologon the runner account,
                let the tester group RDP in, schedule shutdown at the expiry
@@ -44,6 +44,24 @@ share a desktop.
 | `desktop.tf` | The launch template (baked image via `resolve:ssm:`, IMDSv2, terminate on shutdown), its role, its security group (RDP in from `rdp_cidrs` only; HTTPS out; all traffic to `ad_cidrs`), and the settings the boot script reads |
 | `run.tf` | The two SSM documents, `run` and `leave` |
 | `operator.tf` | A managed policy for whatever runs `ec2-uat.sh` (attach it to the GHES runner role), and the discovery parameter the script finds everything from |
+
+## Running it
+
+The GHES workflow [`desktop-uat-ec2.yml`](../.github/workflows/desktop-uat-ec2.yml)
+does it all: resolve the release, stage it, run, upload the report, ask for sign-off.
+Its header lists the repository variables it needs; set `UAT_PATH=ec2` to send
+Artifactory releases here rather than to the agentic workflow. By hand:
+
+```sh
+export UAT_EC2_PARAMETER=/desktop-uat/uat/ec2-operator AWS_REGION=ap-southeast-2
+scripts/ec2-uat.sh run --build-s3-uri s3://<bucket>/staging/... --build-sha256 <hex> \
+    --scenarios harness/scenarios --run-id manual-1 --state-root %APPDATA%/UatDemo \
+    --hold-minutes 120 --out reports
+scripts/ec2-uat.sh teardown <instance-id>   # done with a held desktop early
+```
+
+`--hold-minutes` keeps the desktop up for testers after the run. The job summary says
+where to RDP to, and the desktop terminates itself when the time is up.
 | `outputs.tf`, `providers.tf`, `versions.tf`, `main.tf` | The usual |
 
 One provider (`hashicorp/aws`). No network, NAT, AppStream or Lambda.

@@ -42,6 +42,20 @@ def test_stages_a_verified_release_content_addressed(env, fake_aws, artifactory,
     }
 
 
+def test_stages_into_a_given_bucket_and_prefix_for_the_ec2_path(env, fake_aws, artifactory, tmp_path):
+    # cdktn's EC2 path has its own bucket, and its operator may write only under staging/.
+    artifactory.publish(f"{REPO}/{PATH}", BODY, SHA)
+
+    r = run_script("stage-from-artifactory.sh", REPO, PATH,
+                   env={**env, "STAGE_BUCKET": "desktop-uat-uat-1", "STAGE_PREFIX": "staging/"})
+
+    assert r.returncode == 0, r.stderr
+    key = f"desktop-uat-uat-1/staging/artifactory/{REPO}/{SHA}/App-1.4.0.msi"
+    assert (fake_aws.s3_dir / key).read_bytes() == BODY
+    assert outputs(tmp_path / "github_output")["build_s3_uri"] == f"s3://{key}"
+    assert fake_aws.called("ssm", "get-parameter") == []
+
+
 def test_sends_the_token_from_secrets_manager_as_a_bearer_token(env, artifactory):
     artifactory.publish(f"{REPO}/{PATH}", BODY, SHA)
 

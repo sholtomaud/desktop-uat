@@ -21,6 +21,9 @@ ad_join_ou          = "OU=UAT,OU=Computers,DC=corp,DC=example,DC=com"
 ad_join_secret_name = "desktop-uat/ad-join"
 ad_tester_group     = "UAT-Testers"
 
+# The read-only Artifactory token the operator stages builds with, {"token"}.
+artifactory_token_secret_name = "desktop-uat/artifactory-token"
+
 # Optional; these are the defaults.
 # ami_parameter          = "/desktop-uat/ami/windows"
 # instance_type          = "m7i.large"

@@ -22,6 +22,7 @@ export interface Inputs {
   adJoinSecretName: TerraformVariable;
   adTesterGroup: TerraformVariable;
   amiParameter: TerraformVariable;
+  artifactoryTokenSecretName: TerraformVariable;
   instanceType: TerraformVariable;
   rootVolumeGb: TerraformVariable;
   stagingRetentionDays: TerraformVariable;
@@ -117,6 +118,8 @@ function variables(scope: Construct): Inputs {
     adTesterGroup: s('ad_tester_group', 'AD group whose members may RDP in, by name in that domain, e.g. UAT-Testers'),
     amiParameter: s('ami_parameter', 'SSM parameter holding the baked image id (image/ec2/Build-UatEc2Image.ps1 publishes it)',
       '/desktop-uat/ami/windows'),
+    artifactoryTokenSecretName: s('artifactory_token_secret_name',
+      'Secrets Manager secret (created out of band) with JSON {"token"}: a read-only Artifactory token the operator stages builds with'),
     instanceType: s('instance_type', 'Instance type for the desktops', 'm7i.large'),
     rootVolumeGb: n('root_volume_gb', 'Root volume size in GiB', 100),
     stagingRetentionDays: n('staging_retention_days', 'Days staged builds and scenarios are kept', 14),

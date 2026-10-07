@@ -30,8 +30,8 @@ export class Operator extends Construct {
   constructor(scope: Construct, id: string, props: OperatorProps) {
     super(scope, id);
     const { inputs: i, partition, storage, desktop, documents } = props;
-    const purpose = `desktop-uat-${i.environment.stringValue}`;
     const bucket = storage.bucket.arn;
+    const purpose = `desktop-uat-${i.environment.stringValue}`;
     this.discovery = new SsmParameter(this, 'discovery', {
       name: `/desktop-uat/${i.environment.stringValue}/ec2-operator`,
       type: 'String',
@@ -43,6 +43,7 @@ export class Operator extends Construct {
         RunDocument: documents.run.name,
         LeaveDocument: documents.leave.name,
         Region: i.region.stringValue,
+        Purpose: purpose,
       }),
     });
 
@@ -81,6 +82,12 @@ export class Operator extends Construct {
           resources: ['*'],
         },
         { sid: 'Stage', actions: ['s3:PutObject', 's3:GetObject'], resources: [`${bucket}/${STAGING}*`] },
+        {
+          // stage-from-artifactory.sh pulls the build with it.
+          sid: 'ArtifactoryToken',
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [`arn:${partition}:secretsmanager:${i.region.stringValue}:*:secret:${i.artifactoryTokenSecretName.stringValue}-??????`],
+        },
         { sid: 'ReadReports', actions: ['s3:GetObject'], resources: [`${bucket}/${RUNS}*`] },
         { sid: 'ListBucket', actions: ['s3:ListBucket'], resources: [bucket] },
       ],

@@ -2,7 +2,7 @@ resource "aws_ssm_parameter" "operator_discovery" {
   description = "What scripts/ec2-uat.sh launches, commands and stages into"
   name        = "/desktop-uat/${var.environment}/ec2-operator"
   type        = "String"
-  value       = jsonencode({ "LaunchTemplateId" = aws_launch_template.desktop_lt.id, "SubnetIds" = var.subnet_ids, "Bucket" = aws_s3_bucket.storage_bucket.bucket, "RunDocument" = aws_ssm_document.run_run.name, "LeaveDocument" = aws_ssm_document.run_leave.name, "Region" = var.region })
+  value       = jsonencode({ "LaunchTemplateId" = aws_launch_template.desktop_lt.id, "SubnetIds" = var.subnet_ids, "Bucket" = aws_s3_bucket.storage_bucket.bucket, "RunDocument" = aws_ssm_document.run_run.name, "LeaveDocument" = aws_ssm_document.run_leave.name, "Region" = var.region, "Purpose" = "desktop-uat-${var.environment}" })
 }
 
 data "aws_iam_policy_document" "operator_permissions" {
@@ -129,6 +129,15 @@ data "aws_iam_policy_document" "operator_permissions" {
       "${aws_s3_bucket.storage_bucket.arn}/staging/*"
     ]
     sid = "Stage"
+  }
+  statement {
+    actions = [
+      "secretsmanager:GetSecretValue"
+    ]
+    resources = [
+      "arn:${data.aws_partition.partition.partition}:secretsmanager:${var.region}:*:secret:${var.artifactory_token_secret_name}-??????"
+    ]
+    sid = "ArtifactoryToken"
   }
   statement {
     actions = [
