@@ -40,6 +40,8 @@ concurrency:
 jobs:
   uat:
     name: Agentic UAT
+    # A release runs on the EC2 path instead when UAT_PATH is "ec2" (desktop-uat-ec2.yml).
+    if: github.event_name != 'repository_dispatch' || vars.UAT_PATH != 'ec2'
     runs-on: [self-hosted, linux, desktop-uat]
     timeout-minutes: 240
     outputs:

@@ -17,7 +17,7 @@ The repository has four parts, which never run in the same place:
 | [`infra/`](infra/) | TypeScript, CDK | `cdk deploy`, from a laptop or a pipeline |
 | [`cdktn/`](cdktn/) + [`image/ec2/`](image/ec2/) | TypeScript, cdktn → committed HCL; PowerShell | `terraform`/`tofu apply` of [`cdktn/terraform/`](cdktn/terraform/) (not yet applied); the scripts **inside the EC2 Windows image** |
 | [`harness/`](harness/) | Python 3.11 | the GHES runner (Amazon Linux 2023), driven by the workflow |
-| [`scripts/`](scripts/) + [`.github/workflows/desktop-uat.yml`](.github/workflows/desktop-uat.yml) | bash | the GHES runner |
+| [`scripts/`](scripts/) + [`.github/workflows/desktop-uat.yml`](.github/workflows/desktop-uat.yml), [`desktop-uat-ec2.yml`](.github/workflows/desktop-uat-ec2.yml) | bash | the GHES runner |
 | [`image/flaui-mcp-server/`](image/flaui-mcp-server/) | C#, .NET 8 | **inside the Windows desktop**, baked into the WorkSpaces image |
 
 There are two ways to deploy, for two ways of testing. `infra/` is the agent-driven
@@ -169,6 +169,10 @@ The EC2 path has its own contracts, between `cdktn/` and `image/ec2/`:
   `Build-UatEc2Image.ps1` installs them.
 - **The instance role**, which must allow every AWS cmdlet the scripts call, and no more.
 
+- **The discovery parameter** (`/desktop-uat/<env>/ec2-operator`) and the operator
+  policy: what `scripts/ec2-uat.sh` reads and calls, and the `run` document's
+  parameters and patterns, which the script sends and checks.
+
 [`cdktn/test/contracts.test.ts`](cdktn/test/contracts.test.ts) checks those against
 the synthesized Terraform. Change both
 sides of a contract in the same PR. If a contract test breaks, read it as a missing
@@ -179,9 +183,9 @@ change on the other side, not as a test to loosen.
 - **The workflow:** keep logic out of `run:` blocks. Put it in `scripts/` and test it
   there, as with [`resolve-artifact.sh`](scripts/resolve-artifact.sh). Pass event data
   in through `env:`, never as `${{ }}` inside a script: webhook payloads, form inputs
-  and branch names are all attacker-controlled. Stay on `actions/upload-artifact@v3`,
+  and branch names are all attacker-controlled. Stay on `actions/upload-artifact@v3` in the GHES workflows,
   because GHES does not support v4. That is the one actionlint finding that is
-  suppressed, in [`.github/actionlint.yaml`](.github/actionlint.yaml).
+  suppressed, per workflow, in [`.github/actionlint.yaml`](.github/actionlint.yaml).
 - **The CDK:** synth must stay offline. A new context lookup (`fromLookup`, AZs for a
   new account or region) needs its answer committed in
   [`infra/cdk.context.json`](infra/cdk.context.json).

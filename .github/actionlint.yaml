@@ -8,3 +8,7 @@ paths:
     ignore:
       # Deliberate: GHES does not support upload-artifact@v4 (see README, "GHES configuration").
       - 'the runner of "actions/upload-artifact@v3" action is too old'
+  .github/workflows/desktop-uat-ec2.yml:
+    ignore:
+      # The same: it runs on GHES too.
+      - 'the runner of "actions/upload-artifact@v3" action is too old'

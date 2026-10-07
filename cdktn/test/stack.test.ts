@@ -12,14 +12,14 @@ const { tf } = synth();
 describe('inputs', () => {
   test.each([
     'region', 'allowed_account_ids', 'environment', 'vpc_id', 'subnet_ids', 'rdp_cidrs', 'ad_cidrs',
-    'ad_domain', 'ad_join_ou', 'ad_join_secret_name', 'ad_tester_group', 'ami_parameter',
+    'ad_domain', 'ad_join_ou', 'ad_join_secret_name', 'ad_tester_group', 'ami_parameter', 'artifactory_token_secret_name',
   ])('%s is a described variable', name => {
     expect(tf.variable[name]).toMatchObject({ description: expect.stringMatching(/^.{20,}$/) });
   });
 
   test('defaults exist only where a sensible one does', () => {
     for (const required of ['region', 'allowed_account_ids', 'vpc_id', 'subnet_ids', 'rdp_cidrs', 'ad_cidrs',
-      'ad_domain', 'ad_join_ou', 'ad_join_secret_name', 'ad_tester_group']) {
+      'ad_domain', 'ad_join_ou', 'ad_join_secret_name', 'ad_tester_group', 'artifactory_token_secret_name']) {
       expect(tf.variable[required].default).toBeUndefined();
     }
     expect(tf.variable.environment.default).toBe('uat');
@@ -241,6 +241,7 @@ describe('the discovery parameter: how ec2-uat.sh finds everything, with no Terr
       RunDocument: 'aws_ssm_document.run_run.name',
       LeaveDocument: 'aws_ssm_document.run_leave.name',
       Region: 'var.region',
+      Purpose: '"desktop-uat-${var.environment}"',
     })) {
       expect(p.value).toContain(`"${key}" = ${value}`);
     }

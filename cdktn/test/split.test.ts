@@ -3,7 +3,7 @@
  * providers, variables, outputs, and one file per component. Terraform reads
  * every .tf in the directory as one module, so the split changes no behaviour.
  */
-import { splitHcl } from '../lib/split';
+import { splitHcl } from '../lib/hcl';
 
 const formatted = `terraform {
   required_providers {

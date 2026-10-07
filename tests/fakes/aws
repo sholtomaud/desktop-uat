@@ -6,9 +6,12 @@ scripts run unmodified with no AWS account. Every invocation is appended to a lo
 so a test can assert what was (and was not) called.
 
   FAKE_AWS_STATE  JSON: {"ssm": {name: value}, "secrets": {id: string},
-                         "fleet_states": [state, ...], "s3": {"bucket/key": {...}}}
-                  describe-fleets returns fleet_states[0] and drops it while more
-                  than one remains, so ["STOPPED", "STARTING", "RUNNING"] is a
+                         "fleet_states": [state, ...], "s3": {"bucket/key": {...}},
+                         "ec2": {"next_instance", "capacity_errors": [subnet], "private_ip"},
+                         "ssm_instances": [[ping, computer name], ...],
+                         "invocations": {document: [[status, response code], ...]}}
+                  Sequences answer one poll each and the last one sticks:
+                  describe-fleets with ["STOPPED", "STARTING", "RUNNING"] is a
                   fleet that comes up on the third poll and then stays up.
   FAKE_AWS_LOG    one JSON array of argv per line
   FAKE_AWS_S3_DIR where `s3 cp` puts object bodies
@@ -41,6 +44,15 @@ def save() -> None:
     STATE.write_text(json.dumps(state))
 
 
+def next_of(seq: list):
+    """The first item; dropped while more than one remains, so the last one sticks."""
+    item = seq[0]
+    if len(seq) > 1:
+        seq.pop(0)
+        save()
+    return item
+
+
 service, op = argv[0], argv[1]
 
 if (service, op) == ("ssm", "get-parameter"):
@@ -59,6 +71,13 @@ elif (service, op) == ("secretsmanager", "get-secret-value"):
         fail("ResourceNotFoundException", sid)
     print(state["secrets"][sid])
 
+elif (service, op) == ("s3", "cp") and argv[2].startswith("s3://"):
+    # Download: a prefix with --recursive, as the reports are fetched.
+    assert "--recursive" in argv, argv
+    src = Path(os.environ["FAKE_AWS_S3_DIR"]) / argv[2][len("s3://"):]
+    if src.is_dir():
+        shutil.copytree(src, argv[3], dirs_exist_ok=True)
+
 elif (service, op) == ("s3", "cp"):
     src, dst = argv[2], argv[3]
     assert dst.startswith("s3://"), dst
@@ -71,12 +90,40 @@ elif (service, op) == ("s3", "cp"):
     }
     save()
 
+elif (service, op) == ("s3", "presign"):
+    bucket, _, key = argv[2][len("s3://"):].partition("/")
+    region = os.environ["AWS_REGION"]
+    print(f"https://{bucket}.s3.{region}.amazonaws.com/{key}?X-Amz-Expires={opt('--expires-in')}&X-Amz-Signature=fake")
+
+elif (service, op) == ("ec2", "run-instances"):
+    ec2 = state["ec2"]
+    if opt("--subnet-id") in ec2.get("capacity_errors", []):
+        fail("InsufficientInstanceCapacity", f"no capacity in {opt('--subnet-id')}")
+    print(ec2["next_instance"])
+
+elif (service, op) == ("ec2", "describe-instances"):
+    print(state["ec2"]["private_ip"])
+
+elif (service, op) == ("ec2", "terminate-instances"):
+    pass  # the log is the record
+
+elif (service, op) == ("ssm", "describe-instance-information"):
+    ping, name = next_of(state["ssm_instances"])
+    print(f"{ping}\t{name}")
+
+elif (service, op) == ("ssm", "send-command"):
+    commands = state.setdefault("commands", {})
+    command_id = f"cmd-{len(commands) + 1}"
+    commands[command_id] = opt("--document-name")
+    save()
+    print(command_id)
+
+elif (service, op) == ("ssm", "get-command-invocation"):
+    status, code = next_of(state["invocations"][state["commands"][opt("--command-id")]])
+    print(f"{status}\t{code}")
+
 elif (service, op) == ("appstream", "describe-fleets"):
-    states = state["fleet_states"]
-    print(states[0])
-    if len(states) > 1:
-        states.pop(0)
-        save()
+    print(next_of(state["fleet_states"]))
 
 elif (service, op) in (("appstream", "start-fleet"), ("appstream", "stop-fleet")):
     pass  # the log is the record
