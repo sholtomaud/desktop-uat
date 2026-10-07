@@ -54,17 +54,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The EC2 image's scripts (image/ec2/), in the Windows PowerShell 5.1 the
-      # instances run. What needs an instance (domain join, autologon, SSM) cannot
-      # be tested here.
-      - name: Pester (EC2 image scripts)
-        shell: powershell
-        run: |
-          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -ge '5.5.0')) {
-            Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
-          }
-          Import-Module Pester -MinimumVersion 5.5.0
-          Invoke-Pester -Path image/ec2/tests -CI
 
       - uses: actions/download-artifact@v8
         with:
@@ -158,6 +147,19 @@ jobs:
             echo ""
             echo "**[Download the UAT report]($ARTIFACT_URL)**: unzip it and open \`report.html\` to see every screenshot."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The EC2 image's scripts (image/ec2/), in the Windows PowerShell 5.1 the
+      # instances run. Independent of the steps above, so it runs whatever they did.
+      # What needs an instance (domain join, autologon, SSM) cannot be tested here.
+      - name: Pester (EC2 image scripts)
+        if: success() || failure()
+        shell: powershell
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -ge '5.5.0')) {
+            Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+          Import-Module Pester -MinimumVersion 5.5.0
+          Invoke-Pester -Path image/ec2/tests -CI
 
       # A failing UI test is far easier to read with a picture of the desktop.
       - name: Screenshot on failure

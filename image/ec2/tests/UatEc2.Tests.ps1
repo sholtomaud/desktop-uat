@@ -3,7 +3,7 @@
 # scheduled task, SSM) is proven only by a run on AWS.
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot '..' 'UatEc2.psm1') -Force
+    Import-Module "$PSScriptRoot\..\UatEc2.psm1" -Force
 }
 
 Describe 'Get-UatComputerName' {
