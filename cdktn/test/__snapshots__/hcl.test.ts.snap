@@ -1,0 +1,621 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`the whole configuration, as HCL 1`] = `
+"terraform {
+required_providers {
+  aws = {
+version = "6.66.0"
+source = "hashicorp/aws"
+}
+}
+backend "local" {
+path = "terraform.tfstate"
+}
+
+
+}
+
+variable "region" {
+description = "AWS region, e.g. ap-southeast-2"
+type = string
+}
+
+variable "allowed_account_ids" {
+description = "The only AWS account ids this may be applied to"
+type = list(string)
+}
+
+variable "environment" {
+default = "uat"
+description = "Environment name, part of every resource name: 2-16 of [a-z0-9-]"
+type = string
+validation {
+error_message = "environment must be 2-16 characters of [a-z0-9-]."
+condition = "\${can(regex("^[a-z0-9-]{2,16}$", var.environment))}"
+}
+}
+
+variable "vpc_id" {
+description = "The existing VPC the instances run in"
+type = string
+}
+
+variable "subnet_ids" {
+description = "Private subnets of that VPC; they must reach SSM, S3, Artifactory and the domain controllers"
+type = list(string)
+}
+
+variable "rdp_cidrs" {
+description = "Corporate networks testers RDP in from (TCP 3389)"
+type = list(string)
+}
+
+variable "ad_cidrs" {
+description = "The domain controllers, for the domain join and logons (all traffic)"
+type = list(string)
+}
+
+variable "ad_domain" {
+description = "The AD domain instances join, e.g. corp.example.com"
+type = string
+}
+
+variable "ad_join_ou" {
+description = "OU the computer objects go in, e.g. OU=UAT,OU=Computers,DC=corp,DC=example,DC=com"
+type = string
+}
+
+variable "ad_join_secret_name" {
+description = "Secrets Manager secret (created out of band) with JSON {\\"username\\",\\"password\\"} of an account that may only join computers to that OU"
+type = string
+}
+
+variable "ad_tester_group" {
+description = "AD group whose members may RDP in, by name in that domain, e.g. UAT-Testers"
+type = string
+}
+
+variable "ami_parameter" {
+default = "/desktop-uat/ami/windows"
+description = "SSM parameter holding the baked image id (image/ec2/Build-UatEc2Image.ps1 publishes it)"
+type = string
+}
+
+variable "instance_type" {
+default = "m7i.large"
+description = "Instance type for the desktops"
+type = string
+}
+
+variable "root_volume_gb" {
+default = 100
+description = "Root volume size in GiB"
+type = number
+}
+
+variable "staging_retention_days" {
+default = 14
+description = "Days staged builds and scenarios are kept"
+type = number
+}
+
+variable "run_retention_days" {
+default = 180
+description = "Days run reports and screenshots are kept"
+type = number
+}
+
+provider "aws" {
+allowed_account_ids = "\${var.allowed_account_ids}"
+region = "\${var.region}"
+default_tags {
+tags = {
+Project = "desktop-uat"
+Environment = "\${var.environment}"
+}
+}
+}
+data "aws_partition" "partition" {
+}
+resource "aws_s3_bucket" "storage_bucket" {
+bucket_prefix = "desktop-uat-\${var.environment}-"
+lifecycle {
+  prevent_destroy = true
+}
+}
+resource "aws_s3_bucket_public_access_block" "storage_public_access" {
+block_public_acls = true
+block_public_policy = true
+bucket = "\${aws_s3_bucket.storage_bucket.id}"
+ignore_public_acls = true
+restrict_public_buckets = true
+}
+resource "aws_s3_bucket_server_side_encryption_configuration" "storage_encryption" {
+bucket = "\${aws_s3_bucket.storage_bucket.id}"
+rule {
+apply_server_side_encryption_by_default {
+sse_algorithm = "AES256"
+}
+}
+}
+resource "aws_s3_bucket_lifecycle_configuration" "storage_expiry" {
+bucket = "\${aws_s3_bucket.storage_bucket.id}"
+rule {
+id = "staging"
+status = "Enabled"
+expiration {
+days = "\${var.staging_retention_days}"
+}
+filter {
+prefix = "staging/"
+}
+}
+rule {
+id = "runs"
+status = "Enabled"
+expiration {
+days = "\${var.run_retention_days}"
+}
+filter {
+prefix = "runs/"
+}
+}
+}
+data "aws_iam_policy_document" "storage_policy_document" {
+statement {
+actions = [
+"s3:*"
+]
+effect = "Deny"
+resources = [
+"\${aws_s3_bucket.storage_bucket.arn}",
+"\${aws_s3_bucket.storage_bucket.arn}/*"
+]
+sid = "DenyInsecureTransport"
+condition {
+test = "Bool"
+values = [
+"false"
+]
+variable = "aws:SecureTransport"
+}
+principals {
+identifiers = [
+"*"
+]
+type = "*"
+}
+}
+}
+resource "aws_s3_bucket_policy" "storage_policy" {
+bucket = "\${aws_s3_bucket.storage_bucket.id}"
+policy = "\${data.aws_iam_policy_document.storage_policy_document.json}"
+depends_on = [
+aws_s3_bucket_public_access_block.storage_public_access,
+]
+}
+resource "aws_ssm_parameter" "desktop_config" {
+description = "Settings Uat-Boot.ps1 reads at every boot"
+name = "/desktop-uat/\${var.environment}/ec2-config"
+type = "String"
+value = "\${jsonencode({"Domain" = var.ad_domain, "JoinOu" = var.ad_join_ou, "JoinSecretId" = var.ad_join_secret_name, "TesterGroup" = var.ad_tester_group, "Bucket" = aws_s3_bucket.storage_bucket.bucket, "Region" = var.region})}"
+}
+data "aws_iam_policy_document" "desktop_assume" {
+statement {
+actions = [
+"sts:AssumeRole"
+]
+principals {
+identifiers = [
+"ec2.amazonaws.com"
+]
+type = "Service"
+}
+}
+}
+resource "aws_iam_role" "desktop_role" {
+assume_role_policy = "\${data.aws_iam_policy_document.desktop_assume.json}"
+description = "Desktop UAT instance: SSM, its settings, the domain join, run reports"
+name_prefix = "desktop-uat-\${var.environment}-desktop-"
+}
+resource "aws_iam_role_policy_attachment" "desktop_ssm_core" {
+policy_arn = "arn:\${data.aws_partition.partition.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+role = "\${aws_iam_role.desktop_role.name}"
+}
+data "aws_iam_policy_document" "desktop_permissions" {
+statement {
+actions = [
+"ssm:GetParameter"
+]
+resources = [
+"\${aws_ssm_parameter.desktop_config.arn}"
+]
+sid = "Config"
+}
+statement {
+actions = [
+"secretsmanager:GetSecretValue"
+]
+resources = [
+"arn:\${data.aws_partition.partition.partition}:secretsmanager:\${var.region}:*:secret:\${var.ad_join_secret_name}-??????"
+]
+sid = "JoinSecret"
+}
+statement {
+actions = [
+"s3:PutObject"
+]
+resources = [
+"\${aws_s3_bucket.storage_bucket.arn}/runs/*"
+]
+sid = "RunReports"
+}
+}
+resource "aws_iam_role_policy" "desktop_policy" {
+policy = "\${data.aws_iam_policy_document.desktop_permissions.json}"
+role = "\${aws_iam_role.desktop_role.name}"
+}
+resource "aws_iam_instance_profile" "desktop_profile" {
+name_prefix = "desktop-uat-\${var.environment}-desktop-"
+role = "\${aws_iam_role.desktop_role.name}"
+}
+resource "aws_security_group" "desktop_sg" {
+description = "Desktop UAT instances: RDP from corporate networks; HTTPS and AD out"
+name_prefix = "desktop-uat-\${var.environment}-desktop-"
+vpc_id = "\${var.vpc_id}"
+lifecycle {
+  create_before_destroy = true
+}
+}
+resource "aws_vpc_security_group_ingress_rule" "desktop_rdp" {
+cidr_ipv4 = "\${each.value}"
+description = "RDP from corporate networks"
+from_port = 3389
+ip_protocol = "tcp"
+security_group_id = "\${aws_security_group.desktop_sg.id}"
+to_port = 3389
+for_each = "\${toset(var.rdp_cidrs)}"
+}
+resource "aws_vpc_security_group_egress_rule" "desktop_https" {
+cidr_ipv4 = "0.0.0.0/0"
+description = "HTTPS: SSM, S3, the build and scenarios"
+from_port = 443
+ip_protocol = "tcp"
+security_group_id = "\${aws_security_group.desktop_sg.id}"
+to_port = 443
+}
+resource "aws_vpc_security_group_egress_rule" "desktop_ad" {
+cidr_ipv4 = "\${each.value}"
+description = "Domain controllers"
+ip_protocol = "-1"
+security_group_id = "\${aws_security_group.desktop_sg.id}"
+for_each = "\${toset(var.ad_cidrs)}"
+}
+resource "aws_launch_template" "desktop_lt" {
+description = "Desktop UAT: the baked Windows image, run by scripts/ec2-uat.sh"
+image_id = "resolve:ssm:\${var.ami_parameter}"
+instance_initiated_shutdown_behavior = "terminate"
+instance_type = "\${var.instance_type}"
+name_prefix = "desktop-uat-\${var.environment}-desktop-"
+user_data = "\${base64encode("<powershell>& 'C:/Uat/Uat-Boot.ps1' -ConfigParameter '\${aws_ssm_parameter.desktop_config.name}'</powershell><persist>true</persist>")}"
+vpc_security_group_ids = [
+"\${aws_security_group.desktop_sg.id}"
+]
+block_device_mappings {
+device_name = "/dev/sda1"
+ebs {
+delete_on_termination = "true"
+encrypted = "true"
+volume_size = "\${var.root_volume_gb}"
+volume_type = "gp3"
+}
+}
+iam_instance_profile {
+arn = "\${aws_iam_instance_profile.desktop_profile.arn}"
+}
+metadata_options {
+http_endpoint = "enabled"
+http_put_response_hop_limit = 1
+http_tokens = "required"
+instance_metadata_tags = "enabled"
+}
+tag_specifications {
+resource_type = "instance"
+tags = {
+Purpose = "desktop-uat-\${var.environment}"
+}
+}
+tag_specifications {
+resource_type = "volume"
+tags = {
+Purpose = "desktop-uat-\${var.environment}"
+}
+}
+}
+resource "aws_ssm_document" "run_run" {
+content = <<EOF
+{
+  "schemaVersion": "2.2",
+  "description": "Desktop UAT: one scripted run in the desktop session, reports to S3",
+  "parameters": {
+    "RunId": {
+      "type": "String",
+      "description": "Run id; reports go to runs/<RunId>/",
+      "allowedPattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "BuildUrl": {
+      "type": "String",
+      "description": "Presigned HTTPS URL of the build zip",
+      "allowedPattern": "^https://[-A-Za-z0-9.]+/[-A-Za-z0-9/._~%&=+:?]*$"
+    },
+    "BuildSha256": {
+      "type": "String",
+      "description": "SHA-256 the build must have",
+      "allowedPattern": "^[a-f0-9]{64}$"
+    },
+    "ScenariosUrl": {
+      "type": "String",
+      "description": "Presigned HTTPS URL of the scenarios zip",
+      "allowedPattern": "^https://[-A-Za-z0-9.]+/[-A-Za-z0-9/._~%&=+:?]*$"
+    },
+    "Tags": {
+      "type": "String",
+      "description": "Only scenarios with one of these tags; empty for all",
+      "allowedPattern": "^[A-Za-z0-9,_-]*$",
+      "default": ""
+    },
+    "StateRoot": {
+      "type": "String",
+      "description": "What reset_app_state may delete, e.g. %APPDATA%/UatDemo",
+      "allowedPattern": "^[A-Za-z0-9%:/ ._-]{1,200}$"
+    },
+    "GitRef": {
+      "type": "String",
+      "description": "For the report",
+      "allowedPattern": "^[A-Za-z0-9/._-]{0,200}$",
+      "default": ""
+    },
+    "GitSha": {
+      "type": "String",
+      "description": "For the report",
+      "allowedPattern": "^[a-f0-9]{0,40}$",
+      "default": ""
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runPowerShellScript",
+      "name": "run",
+      "inputs": {
+        "timeoutSeconds": "7200",
+        "runCommand": [
+          "& 'C:/Uat/Uat-Run.ps1' -RunId '{{ RunId }}' -BuildUrl '{{ BuildUrl }}' -BuildSha256 '{{ BuildSha256 }}' -ScenariosUrl '{{ ScenariosUrl }}' -Tags '{{ Tags }}' -StateRoot '{{ StateRoot }}' -GitRef '{{ GitRef }}' -GitSha '{{ GitSha }}'; exit $LASTEXITCODE"
+        ]
+      }
+    }
+  ]
+}
+EOF
+document_format = "JSON"
+document_type = "Command"
+name = "desktop-uat-\${var.environment}-run"
+}
+resource "aws_ssm_document" "run_leave" {
+content = <<EOF
+{
+  "schemaVersion": "2.2",
+  "description": "Desktop UAT: leave the domain, removing the computer object, before termination",
+  "mainSteps": [
+    {
+      "action": "aws:runPowerShellScript",
+      "name": "leave",
+      "inputs": {
+        "timeoutSeconds": "600",
+        "runCommand": [
+          "& 'C:/Uat/Uat-Leave.ps1'; exit $LASTEXITCODE"
+        ]
+      }
+    }
+  ]
+}
+EOF
+document_format = "JSON"
+document_type = "Command"
+name = "desktop-uat-\${var.environment}-leave"
+}
+resource "aws_ssm_parameter" "operator_discovery" {
+description = "What scripts/ec2-uat.sh launches, commands and stages into"
+name = "/desktop-uat/\${var.environment}/ec2-operator"
+type = "String"
+value = "\${jsonencode({"LaunchTemplateId" = aws_launch_template.desktop_lt.id, "SubnetIds" = var.subnet_ids, "Bucket" = aws_s3_bucket.storage_bucket.bucket, "RunDocument" = aws_ssm_document.run_run.name, "LeaveDocument" = aws_ssm_document.run_leave.name, "Region" = var.region})}"
+}
+data "aws_iam_policy_document" "operator_permissions" {
+statement {
+actions = [
+"ssm:GetParameter"
+]
+resources = [
+"\${aws_ssm_parameter.operator_discovery.arn}"
+]
+sid = "Discover"
+}
+statement {
+actions = [
+"ec2:RunInstances"
+]
+resources = [
+"*"
+]
+sid = "RunFromTemplate"
+condition {
+test = "ArnLike"
+values = [
+"\${aws_launch_template.desktop_lt.arn}"
+]
+variable = "ec2:LaunchTemplate"
+}
+}
+statement {
+actions = [
+"ec2:CreateTags"
+]
+resources = [
+"arn:\${data.aws_partition.partition.partition}:ec2:*:*:instance/*",
+"arn:\${data.aws_partition.partition.partition}:ec2:*:*:volume/*"
+]
+sid = "TagAtLaunch"
+condition {
+test = "StringEquals"
+values = [
+"RunInstances"
+]
+variable = "ec2:CreateAction"
+}
+}
+statement {
+actions = [
+"iam:PassRole"
+]
+resources = [
+"\${aws_iam_role.desktop_role.arn}"
+]
+sid = "PassDesktopRole"
+}
+statement {
+actions = [
+"ssm:GetParameters"
+]
+resources = [
+"arn:\${data.aws_partition.partition.partition}:ssm:\${var.region}:*:parameter\${var.ami_parameter}"
+]
+sid = "ResolveImage"
+}
+statement {
+actions = [
+"ec2:TerminateInstances"
+]
+resources = [
+"*"
+]
+sid = "Terminate"
+condition {
+test = "StringEquals"
+values = [
+"desktop-uat-\${var.environment}"
+]
+variable = "aws:ResourceTag/Purpose"
+}
+}
+statement {
+actions = [
+"ssm:SendCommand"
+]
+resources = [
+"arn:\${data.aws_partition.partition.partition}:ec2:*:*:instance/*"
+]
+sid = "CommandInstances"
+condition {
+test = "StringEquals"
+values = [
+"desktop-uat-\${var.environment}"
+]
+variable = "aws:ResourceTag/Purpose"
+}
+}
+statement {
+actions = [
+"ssm:SendCommand"
+]
+resources = [
+"\${aws_ssm_document.run_run.arn}",
+"\${aws_ssm_document.run_leave.arn}"
+]
+sid = "CommandDocuments"
+}
+statement {
+actions = [
+"ec2:DescribeInstances",
+"ssm:DescribeInstanceInformation",
+"ssm:GetCommandInvocation",
+"ssm:ListCommandInvocations"
+]
+resources = [
+"*"
+]
+sid = "Observe"
+}
+statement {
+actions = [
+"s3:PutObject",
+"s3:GetObject"
+]
+resources = [
+"\${aws_s3_bucket.storage_bucket.arn}/staging/*"
+]
+sid = "Stage"
+}
+statement {
+actions = [
+"s3:GetObject"
+]
+resources = [
+"\${aws_s3_bucket.storage_bucket.arn}/runs/*"
+]
+sid = "ReadReports"
+}
+statement {
+actions = [
+"s3:ListBucket"
+]
+resources = [
+"\${aws_s3_bucket.storage_bucket.arn}"
+]
+sid = "ListBucket"
+}
+}
+resource "aws_iam_policy" "operator_policy" {
+description = "Run desktop UAT on EC2 with scripts/ec2-uat.sh"
+name = "desktop-uat-\${var.environment}-operator"
+policy = "\${data.aws_iam_policy_document.operator_permissions.json}"
+}
+
+output "bucket" {
+value = "\${aws_s3_bucket.storage_bucket.bucket}"
+description = "Builds are staged under staging/, reports land under runs/<run id>/"
+}
+
+output "launch_template_id" {
+value = "\${aws_launch_template.desktop_lt.id}"
+description = "What ec2-uat.sh launches"
+}
+
+output "security_group_id" {
+value = "\${aws_security_group.desktop_sg.id}"
+description = "The instances' security group"
+}
+
+output "config_parameter" {
+value = "\${aws_ssm_parameter.desktop_config.name}"
+description = "SSM parameter the boot script reads its settings from"
+}
+
+output "discovery_parameter" {
+value = "\${aws_ssm_parameter.operator_discovery.name}"
+description = "SSM parameter ec2-uat.sh finds everything else from"
+}
+
+output "run_document" {
+value = "\${aws_ssm_document.run_run.name}"
+description = "SSM document: one scripted UAT run"
+}
+
+output "leave_document" {
+value = "\${aws_ssm_document.run_leave.name}"
+description = "SSM document: leave the domain before termination"
+}
+
+output "operator_policy_arn" {
+value = "\${aws_iam_policy.operator_policy.arn}"
+description = "Attach to whatever runs ec2-uat.sh, e.g. the GHES runner role"
+}"
+`;

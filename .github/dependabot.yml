@@ -2,7 +2,8 @@
 #
 # Not covered here: the Node and Python base image (Containerfile takes
 # NODE_VERSION from .node-version, which Dependabot cannot follow) and the
-# pinned tool images in the Makefile (actionlint, the .NET SDK). Bump those by hand.
+# pinned tool images in the Makefile (actionlint, the .NET SDK), and OpenTofu in
+# the Containerfile. Bump those by hand.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -14,6 +15,20 @@ updates:
       # a security fix inside it only ever arrives as an aws-cdk-lib release.
       cdk:
         patterns: ["aws-cdk", "aws-cdk-lib", "constructs"]
+      test-tooling:
+        patterns: ["jest", "ts-jest", "@types/*", "ts-node", "typescript"]
+
+  # A provider bump changes the provider version in cdktn/terraform/*/main.tf, so
+  # its PR fails `make cdktn-check` until someone runs `make cdktn-synth tofu-lock`
+  # and commits: on purpose, since that is the change Terraform users will apply.
+  # (No `terraform` ecosystem: the HCL is generated, and is bumped from here.)
+  - package-ecosystem: npm
+    directory: /cdktn
+    schedule:
+      interval: weekly
+    groups:
+      cdktn:
+        patterns: ["cdktn", "@cdktn/*", "constructs"]
       test-tooling:
         patterns: ["jest", "ts-jest", "@types/*", "ts-node", "typescript"]
 
