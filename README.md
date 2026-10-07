@@ -23,7 +23,8 @@ Artifactory --webhook--> GHES workflow --> ephemeral runner (private subnet, NAT
 | Path | What |
 |---|---|
 | `infra/` | CDK (TypeScript): Network, Desktop (fleet, agent-access stack, buckets, janitor), Runners |
-| `cdktn/` | The same deployment in cdktn, committed as Terraform HCL in `cdktn/terraform/` ([its README](cdktn/README.md)) |
+| `cdktn/` | The minimal alternative: ephemeral Windows EC2 in an existing VPC, scripted runs plus testers over RDP with AD accounts. cdktn, committed as Terraform HCL in `cdktn/terraform/` ([its README](cdktn/README.md)) |
+| `image/ec2/` | The EC2 image: its bake script, and the boot, run, session and leave scripts it carries |
 | `scripts/stage-from-artifactory.sh` | Pull release, verify against Artifactory's SHA-256, stage to S3 |
 | `scripts/fleet.sh` | Start/stop fleet, hold/release the janitor lease |
 | `harness/` | Python harness: sessions, agent, deterministic assertions, reporting |
@@ -33,7 +34,7 @@ Artifactory --webhook--> GHES workflow --> ephemeral runner (private subnet, NAT
 | `image/Install-UatImage.ps1` | Prepares the image builder and creates the image |
 | `.github/workflows/desktop-uat.yml` | GHES workflow |
 | `scripts/resolve-artifact.sh` | Turns the triggering event into a validated Artifactory repo and path |
-| `tests/`, `harness/tests/`, `infra/test/`, `cdktn/test/` | The tests, all offline (see [AGENTS.md §5](AGENTS.md#5-what-is-mocked-and-what-is-not-tested-at-all)) |
+| `tests/`, `harness/tests/`, `infra/test/`, `cdktn/test/`, `image/ec2/tests/` | The tests, all offline (see [AGENTS.md §5](AGENTS.md#5-what-is-mocked-and-what-is-not-tested-at-all)) |
 | `Makefile`, `Containerfile` | Every build and check, in containers: `make help` |
 
 ## Developing

@@ -15,9 +15,7 @@
     "typescript": "~5.6.0"
   },
   "dependencies": {
-    "@cdktn/provider-archive": "14.0.1",
     "@cdktn/provider-aws": "25.7.0",
-    "@cdktn/provider-awscc": "1.7.0",
     "cdktn": "0.24.0",
     "constructs": "10.6.0"
   },

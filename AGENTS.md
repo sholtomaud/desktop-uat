@@ -15,15 +15,17 @@ The repository has four parts, which never run in the same place:
 | Part | Language | Where it runs |
 |---|---|---|
 | [`infra/`](infra/) | TypeScript, CDK | `cdk deploy`, from a laptop or a pipeline |
-| [`cdktn/`](cdktn/) | TypeScript, cdktn → committed HCL | `terraform`/`tofu apply` of [`cdktn/terraform/`](cdktn/terraform/) (not yet applied) |
+| [`cdktn/`](cdktn/) + [`image/ec2/`](image/ec2/) | TypeScript, cdktn → committed HCL; PowerShell | `terraform`/`tofu apply` of [`cdktn/terraform/`](cdktn/terraform/) (not yet applied); the scripts **inside the EC2 Windows image** |
 | [`harness/`](harness/) | Python 3.11 | the GHES runner (Amazon Linux 2023), driven by the workflow |
 | [`scripts/`](scripts/) + [`.github/workflows/desktop-uat.yml`](.github/workflows/desktop-uat.yml) | bash | the GHES runner |
 | [`image/flaui-mcp-server/`](image/flaui-mcp-server/) | C#, .NET 8 | **inside the Windows desktop**, baked into the WorkSpaces image |
 
-`cdktn/` is the same deployment as `infra/`, for teams that run Terraform: the same
-settings (it reads `infra/cdk.json`), the same resources, held to the same contracts.
-It is not a fifth part so much as a second description of the first, and the HCL it
-generates is committed so Terraform users can review and apply it without Node.
+There are two ways to deploy, for two ways of testing. `infra/` is the agent-driven
+one: AppStream agent access, a Bedrock agent, isolated desktops. `cdktn/` is the
+minimal one: ephemeral Windows EC2 instances, from an image baked by `image/ec2/`, in
+an existing VPC. They run scripted walkthroughs, and testers RDP in with their AD
+accounts. Its HCL is committed, so teams that run Terraform can review and apply it
+without Node.
 
 They meet only at a few contracts (§6). Most cross-part bugs are a break in one of
 those contracts.
@@ -34,10 +36,10 @@ those contracts.
 
 - **CDK:** `aws-cdk-lib` and `constructs`. Lambda code stays inline and uses only
   the AWS SDK that the runtime already provides. No bundling, so synth needs no Docker.
-- **cdktn:** `cdktn`, `constructs`, and the prebuilt `@cdktn/provider-aws`,
-  `-awscc` and `-archive`, all pinned exactly (cdktn is pre-1.0). awscc is there for
-  one resource: only it has the AppStream stack's `agent_access_config`. archive
-  packs the janitor's inline code. No `cdktn-cli`: the library writes HCL itself.
+- **cdktn:** `cdktn`, `constructs` and the prebuilt `@cdktn/provider-aws`, all pinned
+  exactly (cdktn is pre-1.0). No `cdktn-cli`: the library writes HCL itself.
+- **EC2 image scripts:** Windows PowerShell 5.1 and the AWS Tools for PowerShell that
+  AWS's Windows images ship with. Nothing installed for them.
 - **Harness:** `strands-agents`, `mcp-proxy-for-aws`, `boto3`, `pydantic`, `PyYAML`.
   Everything else comes from the standard library.
 - **FlaUI server:** `FlaUI.UIA3`, `ModelContextProtocol`, `Microsoft.Extensions.Hosting`.
@@ -113,6 +115,7 @@ boundary, and the code under test is the real code:
 | the Bedrock agent loop | a scripted agent that calls the real `capture_evidence` / `submit_verdict` tools | [`harness/tests/test_agent.py`](harness/tests/test_agent.py) |
 | the Lambda AWS SDK | fake clients injected through `require` | [`infra/test/janitor.test.ts`](infra/test/janitor.test.ts) |
 | the Windows desktop's screen (local mode) | a fixed PNG in place of the PowerShell capture | [`harness/tests/test_cli.py`](harness/tests/test_cli.py) |
+| the EC2 instance (IMDS, the domain, SSM) | nothing: the EC2 image scripts' logic is in [`UatEc2.psm1`](image/ec2/UatEc2.psm1), tested by Pester in CI's `windows` job; the scripts around it only do I/O | [`image/ec2/tests/`](image/ec2/tests/) |
 
 **There are two ways a scenario runs, and they share one code path** (`runner.execute`):
 an *agent* run on AWS (`AwsBackend`), and a *walkthrough* run on any Windows machine
@@ -121,8 +124,9 @@ steps drive the app instead of the agent. A change to setup, assertions, evidenc
 reporting therefore reaches both runs. A change that only one of them needs goes in its
 backend.
 
-CI's `windows` job runs both of the real things the containers can't: the live FlaUI
-tests, and the worked scenario in walkthrough mode, with its report published.
+CI's `windows` job runs the real things the containers can't: the live FlaUI tests,
+the worked scenario in walkthrough mode with its report published, and Pester on the
+EC2 image scripts.
 
 Not tested locally, and only proven by a real run on AWS: whether the model's
 judgement is any good, what the agent-access service actually does, the
@@ -153,8 +157,19 @@ these contracts:
   harness and `FakeDesktop`.
 
 [`infra/test/contracts.test.ts`](infra/test/contracts.test.ts) reads the consumers'
-source and checks the first four against the synthesized templates, and
-[`cdktn/test/contracts.test.ts`](cdktn/test/contracts.test.ts) checks them against
+source and checks the first four against the synthesized templates.
+
+The EC2 path has its own contracts, between `cdktn/` and `image/ec2/`:
+
+- **The config parameter** (`/desktop-uat/<env>/ec2-config`): its keys are what the
+  boot, run and leave scripts read.
+- **The SSM documents**: the `run` document's parameters are `Uat-Run.ps1`'s, passed
+  single-quoted under patterns that admit no quote.
+- **The script paths**: `C:/Uat/...` in user data and the documents is where
+  `Build-UatEc2Image.ps1` installs them.
+- **The instance role**, which must allow every AWS cmdlet the scripts call, and no more.
+
+[`cdktn/test/contracts.test.ts`](cdktn/test/contracts.test.ts) checks those against
 the synthesized Terraform. Change both
 sides of a contract in the same PR. If a contract test breaks, read it as a missing
 change on the other side, not as a test to loosen.
@@ -171,14 +186,17 @@ change on the other side, not as a test to loosen.
   new account or region) needs its answer committed in
   [`infra/cdk.context.json`](infra/cdk.context.json).
 - **cdktn:** change `cdktn/lib/`, then `make cdktn-synth` and commit the regenerated
-  `cdktn/terraform/`. Never edit the HCL by hand: `make cdktn-check` rejects it. A
-  change to what is deployed is a change to both `infra/` and `cdktn/`, in one PR,
-  each with its tests. After an intended change, `make cdktn-snapshots` rewrites the
-  snapshot; read its diff, it is the HCL diff. After a provider version changes,
-  `make tofu-lock` too. cdktn 0.24's HCL renderer has three known faults, worked
-  around in [`cdktn/lib/hcl.ts`](cdktn/lib/hcl.ts) and tested: awscc attributes
-  written as blocks, quoted `depends_on`/`ignore_changes`, and multi-line locals. A
-  multi-line string must be one `heredocSafe` accepts.
+  `cdktn/terraform/`. Never edit the HCL by hand: `make cdktn-check` rejects it.
+  Environment-specific values are Terraform variables, never constants; see
+  [`cdktn/example.tfvars`](cdktn/example.tfvars). After an intended change, `make
+  cdktn-snapshots` rewrites the snapshot; read its diff, it is the HCL diff. After the
+  provider version changes, `make tofu-lock` too. cdktn 0.24's HCL renderer has
+  faults: see [`cdktn/README.md`](cdktn/README.md). Its main rules are that a
+  multi-line string must be one `heredocSafe` accepts, and that strings use forward
+  slashes, never backslashes.
+- **The EC2 image scripts** (`image/ec2/`): logic goes in `UatEc2.psm1`, with a
+  Pester test; the scripts stay I/O. Write them for Windows PowerShell 5.1, which the
+  instances run. Only a run on AWS proves the domain join, autologon and session task.
 - **The harness:** tools the LLM must never call go in `AGENT_DENYLIST`. A visual
   criterion counts only if the agent cites evidence. Do not relax that to make a
   scenario pass.
