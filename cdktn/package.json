@@ -15,9 +15,9 @@
     "typescript": "~5.9.3"
   },
   "dependencies": {
-    "@cdktn/provider-aws": "25.7.0",
+    "@cdktn/provider-aws": "25.7.2",
     "cdktn": "0.24.0",
-    "constructs": "10.6.0"
+    "constructs": "10.7.2"
   },
   "jest": {
     "testEnvironment": "node",
